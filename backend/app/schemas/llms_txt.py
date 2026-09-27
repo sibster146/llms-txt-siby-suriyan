@@ -26,3 +26,12 @@ class CrawlStatusResponse(BaseModel):
     failed_page_count: int
     created_at: str
     updated_at: str | None = None
+
+
+class SiteSummaryResponse(BaseModel):
+    site_id: str
+    root_url: HttpUrl
+    last_crawl_run_id: str
+    created_at: str
+    updated_at: str
+    modified_at: str | None = None

@@ -21,9 +21,13 @@ class FakeTable:
         self,
         fail: bool = False,
         item: dict[str, Any] | None = None,
+        items: list[dict[str, Any]] | None = None,
+        items_by_site_id: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.fail = fail
         self.item = item
+        self.items = items or []
+        self.items_by_site_id = items_by_site_id or {}
         self.calls: list[dict[str, Any]] = []
 
     def _record(self, operation: str, kwargs: dict[str, Any]) -> None:
@@ -43,9 +47,18 @@ class FakeTable:
     def update_status(self, **kwargs: Any) -> None:
         self._record("update_status", kwargs)
 
-    def get(self, **kwargs: Any) -> dict[str, Any] | None:
+    def get(self, *args: Any, **kwargs: Any) -> dict[str, Any] | None:
+        if args:
+            kwargs["site_id"] = args[0]
         self._record("get", kwargs)
+        site_id = kwargs.get("site_id")
+        if isinstance(site_id, str) and self.items_by_site_id:
+            return self.items_by_site_id.get(site_id)
         return self.item
+
+    def list_for_user(self, user_id: str) -> list[dict[str, Any]]:
+        self._record("list_for_user", {"user_id": user_id})
+        return self.items
 
 
 class FakeQueue:
@@ -261,3 +274,44 @@ def test_get_crawl_status_hides_crawls_not_owned_by_user() -> None:
 
     assert response.status_code == 404
     assert crawl_runs.calls == []
+
+
+def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
+    user_sites = FakeTable(
+        items=[
+            {"user_id": "user-123", "site_id": "site-1"},
+            {"user_id": "user-123", "site_id": "site-2"},
+        ]
+    )
+    sites = FakeTable(
+        items_by_site_id={
+            "site-1": {
+                "site_id": "site-1",
+                "root_url": "https://one.example/",
+                "last_crawl_run_id": "crawl-1",
+                "created_at": "2026-09-26T12:00:00+00:00",
+                "updated_at": "2026-09-26T12:00:00+00:00",
+                "modified_at": "2026-09-27T13:00:00+00:00",
+            },
+            "site-2": {
+                "site_id": "site-2",
+                "root_url": "https://two.example/",
+                "last_crawl_run_id": "crawl-2",
+                "created_at": "2026-09-27T12:00:00+00:00",
+                "updated_at": "2026-09-27T12:00:00+00:00",
+                "modified_at": "2026-09-27T12:00:00+00:00",
+            },
+        }
+    )
+    app = _test_app(sites, user_sites, FakeTable(), FakeTable())
+
+    with TestClient(app) as client:
+        response = client.get("/llms-txt/sites")
+
+    assert response.status_code == 200
+    assert [site["site_id"] for site in response.json()] == ["site-1", "site-2"]
+    assert response.json()[0]["modified_at"] == "2026-09-27T13:00:00+00:00"
+    assert user_sites.calls[0] == {
+        "operation": "list_for_user",
+        "user_id": "user-123",
+    }

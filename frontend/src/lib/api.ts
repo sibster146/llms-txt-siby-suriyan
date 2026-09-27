@@ -27,6 +27,15 @@ export interface CrawlStatusResponse {
   updated_at: string | null
 }
 
+export interface SiteSummary {
+  site_id: string
+  root_url: string
+  last_crawl_run_id: string
+  created_at: string
+  updated_at: string
+  modified_at: string | null
+}
+
 async function errorMessage(response: Response, fallback: string): Promise<string> {
   const body = (await response.json().catch(() => ({}))) as ApiError
   return typeof body.detail === 'string' ? body.detail : fallback
@@ -62,6 +71,17 @@ export async function createCrawl(url: string): Promise<CreateCrawlResponse> {
     throw new Error(await errorMessage(response, 'Unable to create the crawl.'))
   }
   return response.json() as Promise<CreateCrawlResponse>
+}
+
+export async function listSites(): Promise<SiteSummary[]> {
+  const response = await fetch(`${apiUrl}/llms-txt/sites`, {
+    headers: await authorizationHeaders(),
+  })
+
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, 'Unable to load your websites.'))
+  }
+  return response.json() as Promise<SiteSummary[]>
 }
 
 export async function getCrawlStatus(

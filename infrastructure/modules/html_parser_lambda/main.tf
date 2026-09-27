@@ -1,6 +1,6 @@
 locals {
   resource_prefix = "${var.environment}_${var.project_name}"
-  function_name   = "${local.resource_prefix}_web_crawler"
+  function_name   = "${local.resource_prefix}_html_parser"
   common_tags = merge(var.tags, {
     Environment = var.environment
     ManagedBy   = "terraform"
@@ -28,51 +28,52 @@ resource "aws_iam_role" "this" {
 
 data "aws_iam_policy_document" "permissions" {
   statement {
-    sid = "ConsumeCrawlQueue"
+    sid = "ConsumeParseQueue"
     actions = [
       "sqs:ChangeMessageVisibility",
       "sqs:DeleteMessage",
       "sqs:GetQueueAttributes",
       "sqs:ReceiveMessage",
     ]
-    resources = [var.crawl_queue_arn]
-  }
-
-  statement {
-    sid       = "PublishParseMessages"
-    actions   = ["sqs:SendMessage"]
     resources = [var.parse_queue_arn]
   }
 
   statement {
-    sid = "UpdateCrawlPages"
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:Query",
-      "dynamodb:UpdateItem",
-    ]
-    resources = [
-      var.crawl_pages_table_arn,
-      "${var.crawl_pages_table_arn}/index/*",
-    ]
+    sid       = "PublishWorkflowMessages"
+    actions   = ["sqs:SendMessage"]
+    resources = [var.crawl_queue_arn, var.llm_txt_queue_arn]
   }
 
   statement {
-    sid       = "UpdateCrawlRunStatus"
+    sid = "ManageCrawlPages"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:UpdateItem",
+    ]
+    resources = [var.crawl_pages_table_arn]
+  }
+
+  statement {
+    sid       = "UpdateCrawlProgress"
     actions   = ["dynamodb:UpdateItem"]
     resources = [var.crawl_runs_table_arn]
   }
 
   statement {
-    sid       = "UpdateSiteChangeState"
-    actions   = ["dynamodb:UpdateItem"]
-    resources = [var.sites_table_arn]
+    sid     = "ReadRawAndManageParsedContent"
+    actions = ["s3:GetObject"]
+    resources = [
+      "${var.application_bucket_arn}/raw/*",
+      "${var.application_bucket_arn}/parsed/*",
+    ]
   }
 
   statement {
-    sid       = "StoreRawHtml"
+    sid       = "WriteParsedContent"
     actions   = ["s3:PutObject"]
-    resources = ["${var.application_bucket_arn}/raw/*"]
+    resources = ["${var.application_bucket_arn}/parsed/*"]
   }
 }
 
@@ -95,7 +96,7 @@ resource "aws_cloudwatch_log_group" "this" {
 
 resource "aws_lambda_function" "this" {
   function_name = local.function_name
-  description   = "Safely downloads queued website pages and stores their raw HTML."
+  description   = "Extracts page content and queues same-site links for crawling."
   package_type  = "Image"
   image_uri     = var.image_uri
   role          = aws_iam_role.this.arn
@@ -105,15 +106,15 @@ resource "aws_lambda_function" "this" {
 
   environment {
     variables = {
-      APPLICATION_S3_BUCKET           = var.application_bucket_name
-      CRAWLER_MAX_ATTEMPTS            = tostring(var.max_attempts)
-      CRAWLER_MAX_RESPONSE_BYTES      = tostring(var.max_response_bytes)
-      CRAWLER_REQUEST_TIMEOUT_SECONDS = tostring(var.request_timeout_seconds)
-      CRAWLER_USER_AGENT              = var.user_agent
-      CRAWL_PAGES_TABLE               = var.crawl_pages_table_name
-      CRAWL_RUNS_TABLE                = var.crawl_runs_table_name
-      SITES_TABLE                     = var.sites_table_name
-      PARSE_QUEUE_URL                 = var.parse_queue_url
+      APPLICATION_S3_BUCKET     = var.application_bucket_name
+      CRAWL_PAGES_TABLE         = var.crawl_pages_table_name
+      CRAWL_RUNS_TABLE          = var.crawl_runs_table_name
+      CRAWL_QUEUE_URL           = var.crawl_queue_url
+      LLM_TXT_QUEUE_URL         = var.llm_txt_queue_url
+      PARSER_MAX_ATTEMPTS       = tostring(var.max_attempts)
+      PARSER_MAX_DEPTH          = tostring(var.max_depth)
+      PARSER_MAX_LINKS_PER_PAGE = tostring(var.max_links_per_page)
+      PARSER_VERSION            = var.parser_version
     }
   }
 
@@ -128,8 +129,8 @@ resource "aws_lambda_function" "this" {
   })
 }
 
-resource "aws_lambda_event_source_mapping" "crawl_queue" {
-  event_source_arn        = var.crawl_queue_arn
+resource "aws_lambda_event_source_mapping" "parse_queue" {
+  event_source_arn        = var.parse_queue_arn
   function_name           = aws_lambda_function.this.arn
   enabled                 = true
   batch_size              = 1

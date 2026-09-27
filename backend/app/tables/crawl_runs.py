@@ -54,3 +54,29 @@ class CrawlRunsTable:
                 ":updated_at": updated_at,
             },
         )
+
+    def record_parsed_page(
+        self,
+        *,
+        site_id: str,
+        crawl_run_id: str,
+        discovered_page_count: int,
+        updated_at: str,
+    ) -> dict[str, Any]:
+        pending_delta = discovered_page_count - 1
+        attributes = self.dynamodb.update_item(
+            key={"site_id": site_id, "crawl_run_id": crawl_run_id},
+            update_expression=(
+                "SET updated_at = :updated_at "
+                "ADD pending_page_count :pending_delta, "
+                "discovered_page_count :discovered, completed_page_count :completed "
+            ),
+            expression_attribute_values={
+                ":pending_delta": pending_delta,
+                ":discovered": discovered_page_count,
+                ":completed": 1,
+                ":updated_at": updated_at,
+            },
+            return_values="ALL_NEW",
+        )
+        return attributes or {}

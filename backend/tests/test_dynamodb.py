@@ -5,10 +5,12 @@ from enum import Enum
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError
 
 from app.clients.dynamodb import (
     DynamoDBClient,
     DynamoDBClientError,
+    DynamoDBConditionNotMetError,
     dataclass_to_dynamodb_item,
 )
 from app.configs.config import Settings
@@ -69,6 +71,28 @@ def test_put_item_wraps_client_errors() -> None:
         DynamoDBClient(FailingTable()).put_item({"site_id": "site-1"})
 
     assert error.value.code == "DYNAMODB_PUT_ITEM_FAILED"
+
+
+def test_update_item_identifies_a_failed_condition() -> None:
+    class StaleWriteTable:
+        def update_item(self, **_: Any) -> None:
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "ConditionalCheckFailedException",
+                        "Message": "The conditional request failed",
+                    }
+                },
+                "UpdateItem",
+            )
+
+    with pytest.raises(DynamoDBConditionNotMetError) as error:
+        DynamoDBClient(StaleWriteTable()).update_item(
+            key={"site_id": "site-1"},
+            update_expression="SET modified_at = :modified_at",
+        )
+
+    assert error.value.code == "DYNAMODB_CONDITION_NOT_MET"
 
 
 @pytest.mark.parametrize("environment", ["dev", "prod"])

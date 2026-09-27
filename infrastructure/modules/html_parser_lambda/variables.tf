@@ -15,23 +15,33 @@ variable "project_name" {
 }
 
 variable "image_uri" {
+  type        = string
   description = "Immutable ECR image URI deployed to the Lambda."
-  type        = string
-}
-
-variable "crawl_queue_arn" {
-  type        = string
-  description = "ARN of the queue that triggers the crawler."
 }
 
 variable "parse_queue_arn" {
   type        = string
-  description = "ARN of the parser queue."
+  description = "ARN of the queue that triggers the parser."
 }
 
-variable "parse_queue_url" {
+variable "crawl_queue_arn" {
   type        = string
-  description = "URL of the parser queue."
+  description = "ARN of the crawler queue."
+}
+
+variable "crawl_queue_url" {
+  type        = string
+  description = "URL of the crawler queue."
+}
+
+variable "llm_txt_queue_arn" {
+  type        = string
+  description = "ARN of the llms.txt generator queue."
+}
+
+variable "llm_txt_queue_url" {
+  type        = string
+  description = "URL of the llms.txt generator queue."
 }
 
 variable "crawl_pages_table_name" {
@@ -54,19 +64,9 @@ variable "crawl_runs_table_arn" {
   description = "DynamoDB crawl-runs table ARN."
 }
 
-variable "sites_table_name" {
-  type        = string
-  description = "DynamoDB sites table name."
-}
-
-variable "sites_table_arn" {
-  type        = string
-  description = "DynamoDB sites table ARN."
-}
-
 variable "application_bucket_name" {
   type        = string
-  description = "S3 bucket used for raw HTML."
+  description = "S3 bucket containing raw and parsed page content."
 }
 
 variable "application_bucket_arn" {
@@ -74,50 +74,50 @@ variable "application_bucket_arn" {
   description = "ARN of the application S3 bucket."
 }
 
-variable "user_agent" {
+variable "parser_version" {
   type        = string
-  description = "User-Agent sent by the crawler."
-  default     = "llms-txt-crawler/1.0"
+  description = "Version included in parsed-content S3 keys."
+  default     = "v1"
 }
 
-variable "request_timeout_seconds" {
+variable "max_depth" {
   type        = number
-  description = "Timeout for each robots.txt or page request."
-  default     = 10
+  description = "Maximum same-site link depth."
+  default     = 3
 }
 
-variable "max_response_bytes" {
+variable "max_links_per_page" {
   type        = number
-  description = "Maximum accepted HTML response size."
-  default     = 5242880
+  description = "Maximum child links accepted from one page."
+  default     = 100
 }
 
 variable "max_attempts" {
   type        = number
-  description = "Number of deliveries before SQS moves a message to the dead-letter queue."
+  description = "Number of parser deliveries before the message reaches its DLQ."
   default     = 5
 }
 
 variable "memory_size" {
   type        = number
   description = "Lambda memory allocation in MB."
-  default     = 512
+  default     = 1024
 }
 
 variable "timeout_seconds" {
   type        = number
   description = "Lambda invocation timeout."
-  default     = 45
+  default     = 60
 }
 
 variable "log_retention_days" {
   type        = number
-  description = "CloudWatch log retention period."
+  description = "CloudWatch log retention."
   default     = 14
 }
 
 variable "tags" {
-  description = "Additional tags applied to Lambda resources."
   type        = map(string)
+  description = "Additional resource tags."
   default     = {}
 }

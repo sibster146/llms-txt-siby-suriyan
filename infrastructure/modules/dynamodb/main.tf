@@ -100,6 +100,23 @@ resource "aws_dynamodb_table" "crawl_pages" {
     type = "S"
   }
 
+  attribute {
+    name = "site_url_key"
+    type = "S"
+  }
+
+  attribute {
+    name = "crawled_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "site_url_crawled_at_index"
+    hash_key        = "site_url_key"
+    range_key       = "crawled_at"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery {
     enabled = var.point_in_time_recovery
   }

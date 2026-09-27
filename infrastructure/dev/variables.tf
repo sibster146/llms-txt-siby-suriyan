@@ -14,3 +14,8 @@ variable "web_crawler_image_uri" {
   description = "Commit-tagged ECR image URI for the web crawler Lambda."
   type        = string
 }
+
+variable "html_parser_image_uri" {
+  description = "Commit-tagged ECR image URI for the HTML parser Lambda."
+  type        = string
+}

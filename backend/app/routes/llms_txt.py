@@ -22,6 +22,7 @@ from app.schemas.llms_txt import (
     CrawlStatusResponse,
     CreateLlmsTxtRequest,
     CreateLlmsTxtResponse,
+    SiteSummaryResponse,
 )
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
@@ -48,6 +49,32 @@ def _canonicalize_url(url: HttpUrl) -> str:
     netloc = hostname if port is None or default_port else f"{hostname}:{port}"
     path = parsed.path or "/"
     return urlunsplit((parsed.scheme.lower(), netloc.lower(), path, parsed.query, ""))
+
+
+@router.get("/sites", response_model=list[SiteSummaryResponse])
+def list_user_sites(
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    sites: Annotated[SitesTable, Depends(get_sites_table)],
+    user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
+) -> list[SiteSummaryResponse]:
+    try:
+        mappings = user_sites.list_for_user(user_id)
+        site_records = [
+            site
+            for mapping in mappings
+            if (site := sites.get(str(mapping["site_id"]))) is not None
+        ]
+    except (DynamoDBClientError, KeyError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The websites could not be loaded.",
+        ) from error
+
+    site_records.sort(
+        key=lambda site: str(site.get("modified_at", "")),
+        reverse=True,
+    )
+    return [SiteSummaryResponse.model_validate(site) for site in site_records]
 
 
 @router.post("", response_model=CreateLlmsTxtResponse, status_code=status.HTTP_201_CREATED)

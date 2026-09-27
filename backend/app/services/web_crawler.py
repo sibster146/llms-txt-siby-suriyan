@@ -17,6 +17,7 @@ from urllib.robotparser import RobotFileParser
 from app.clients.s3 import S3Client
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
+from app.tables.sites import SitesTable
 
 HTML_CONTENT_TYPES = {"application/xhtml+xml", "text/html"}
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
@@ -106,6 +107,7 @@ class WebCrawlerService:
         *,
         crawl_pages: CrawlPagesTable,
         crawl_runs: CrawlRunsTable,
+        sites: SitesTable,
         s3: S3Client,
         sqs_client: Any,
         parse_queue_url: str,
@@ -118,6 +120,7 @@ class WebCrawlerService:
     ) -> None:
         self.crawl_pages = crawl_pages
         self.crawl_runs = crawl_runs
+        self.sites = sites
         self.s3 = s3
         self.sqs_client = sqs_client
         self.parse_queue_url = parse_queue_url
@@ -145,7 +148,7 @@ class WebCrawlerService:
                     updated_at=_utc_now(),
                 )
                 return
-            if existing_status == "COMPLETED":
+            if existing_status in {"COMPLETED", "PARSED"}:
                 return
 
             self.crawl_runs.update_status(
@@ -157,10 +160,18 @@ class WebCrawlerService:
 
             raw_html_s3_key = str((existing_page or {}).get("raw_html_s3_key", ""))
             final_url = str((existing_page or {}).get("final_url", request.url))
+            html_unchanged = bool((existing_page or {}).get("html_unchanged", False))
             if not raw_html_s3_key:
-                raw_html_s3_key, final_url = self._fetch_and_store(request)
+                raw_html_s3_key, final_url, html_unchanged = self._fetch_and_store(
+                    request
+                )
 
-            self._publish_parse_message(request, raw_html_s3_key, final_url)
+            self._publish_parse_message(
+                request,
+                raw_html_s3_key,
+                final_url,
+                html_unchanged,
+            )
             self.crawl_pages.mark_parse_pending(
                 crawl_run_id=request.crawl_run_id,
                 canonical_url_hash=request.canonical_url_hash,
@@ -183,7 +194,7 @@ class WebCrawlerService:
             )
             raise
 
-    def _fetch_and_store(self, request: CrawlRequest) -> tuple[str, str]:
+    def _fetch_and_store(self, request: CrawlRequest) -> tuple[str, str, bool]:
         self.crawl_pages.mark_crawling(
             crawl_run_id=request.crawl_run_id,
             canonical_url_hash=request.canonical_url_hash,
@@ -203,20 +214,39 @@ class WebCrawlerService:
             self.max_response_bytes,
         )
         crawled_at = _utc_now()
-        raw_html_s3_key = (
-            f"raw/{request.site_id}/{request.crawl_run_id}/"
-            f"{request.canonical_url_hash}.html"
+        raw_html_hash = sha256(page.content).hexdigest()
+        previous_page = self.crawl_pages.get_latest_crawled(
+            site_id=request.site_id,
+            canonical_url_hash=request.canonical_url_hash,
         )
-        self.s3.put_bytes(
-            key=raw_html_s3_key,
-            content=page.content,
-            content_type=page.content_type,
-            metadata={
-                "site-id": request.site_id,
-                "crawl-run-id": request.crawl_run_id,
-                "url-sha256": request.canonical_url_hash,
-            },
+        html_unchanged = bool(
+            previous_page
+            and previous_page.get("raw_html_hash") == raw_html_hash
+            and previous_page.get("raw_html_s3_key")
         )
+        if html_unchanged:
+            raw_html_s3_key = str(previous_page["raw_html_s3_key"])
+        else:
+            raw_html_s3_key = (
+                f"raw/{request.site_id}/{request.crawl_run_id}/"
+                f"{request.canonical_url_hash}.html"
+            )
+            self.s3.put_bytes(
+                key=raw_html_s3_key,
+                content=page.content,
+                content_type=page.content_type,
+                metadata={
+                    "site-id": request.site_id,
+                    "crawl-run-id": request.crawl_run_id,
+                    "url-sha256": request.canonical_url_hash,
+                    "raw-html-sha256": raw_html_hash,
+                },
+            )
+            self.sites.mark_content_changed(
+                site_id=request.site_id,
+                crawl_run_id=request.crawl_run_id,
+                modified_at=crawled_at,
+            )
         self.crawl_pages.mark_crawled(
             crawl_run_id=request.crawl_run_id,
             canonical_url_hash=request.canonical_url_hash,
@@ -225,17 +255,20 @@ class WebCrawlerService:
             http_status=page.http_status,
             content_type=page.content_type,
             content_length=len(page.content),
+            raw_html_hash=raw_html_hash,
+            html_unchanged=html_unchanged,
             crawled_at=crawled_at,
             etag=page.etag,
             last_modified=page.last_modified,
         )
-        return raw_html_s3_key, page.final_url
+        return raw_html_s3_key, page.final_url, html_unchanged
 
     def _publish_parse_message(
         self,
         request: CrawlRequest,
         raw_html_s3_key: str,
         final_url: str,
+        html_unchanged: bool,
     ) -> None:
         body = {
             "action": "parse_page",
@@ -247,6 +280,7 @@ class WebCrawlerService:
                 "canonical_url_hash": request.canonical_url_hash,
                 "depth": request.depth,
                 "raw_html_s3_key": raw_html_s3_key,
+                "unchanged": html_unchanged,
             },
         }
         self.sqs_client.send_message(

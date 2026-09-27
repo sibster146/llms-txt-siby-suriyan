@@ -15,8 +15,10 @@ import {
   type CrawlStatus,
   type CrawlStatusResponse,
   type CreateCrawlResponse,
+  type SiteSummary,
   createCrawl,
   getCrawlStatus,
+  listSites,
 } from '../lib/api'
 import type { AuthenticatedUser } from '../lib/auth'
 
@@ -43,10 +45,35 @@ export function HomePage({ onSignOut, user }: HomePageProps) {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
   const [pollError, setPollError] = useState('')
+  const [sitesError, setSitesError] = useState('')
+  const [loadingSites, setLoadingSites] = useState(true)
+  const [sites, setSites] = useState<SiteSummary[]>([])
   const [activeCrawl, setActiveCrawl] = useState<ActiveCrawl | null>(null)
   const activeSiteId = activeCrawl?.site_id
   const activeCrawlRunId = activeCrawl?.crawl_run_id
   const crawlStatus = activeCrawl?.status
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadSites() {
+      try {
+        const loadedSites = await listSites()
+        if (!cancelled) setSites(loadedSites)
+      } catch (error) {
+        if (!cancelled) {
+          setSitesError(error instanceof Error ? error.message : 'Unable to load your websites.')
+        }
+      } finally {
+        if (!cancelled) setLoadingSites(false)
+      }
+    }
+
+    void loadSites()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     if (!modalOpen) return
@@ -114,6 +141,12 @@ export function HomePage({ onSignOut, user }: HomePageProps) {
     try {
       const crawl = await createCrawl(url.trim())
       setActiveCrawl(crawl)
+      try {
+        setSites(await listSites())
+        setSitesError('')
+      } catch (error) {
+        setSitesError(error instanceof Error ? error.message : 'Unable to refresh your websites.')
+      }
       setPollError('')
       setModalOpen(false)
     } catch (error) {
@@ -144,33 +177,51 @@ export function HomePage({ onSignOut, user }: HomePageProps) {
           </button>
         </div>
 
-        {!activeCrawl ? (
+        {loadingSites ? (
+          <div className="workspace-empty" aria-label="Loading websites">
+            <LoaderCircle className="spin" size={24} />
+          </div>
+        ) : sites.length === 0 ? (
           <div className="workspace-empty">
             <FileText size={24} />
             <strong>No websites yet</strong>
           </div>
         ) : (
           <div className="crawl-list" aria-live="polite">
-            <article className="crawl-item">
-              <div className="crawl-icon"><Globe2 size={20} /></div>
-              <div className="crawl-primary">
-                <strong>{activeCrawl.url}</strong>
-                <span>{activeCrawl.crawl_run_id}</span>
-              </div>
-              <div className={`status-badge status-${crawlStatus?.toLowerCase()}`}>
-                {crawlStatus === 'CRAWLED' || crawlStatus === 'COMPLETED' ? <CheckCircle2 size={15} /> : crawlStatus === 'FAILED' ? <AlertCircle size={15} /> : crawlStatus === 'WORKING' ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
-                {crawlStatus && statusLabel(crawlStatus)}
-              </div>
-            </article>
-            {activeCrawl.details && (
-              <div className="crawl-counts">
-                <span>{activeCrawl.details.discovered_page_count} discovered</span>
-                <span>{activeCrawl.details.completed_page_count} completed</span>
-                <span>{activeCrawl.details.failed_page_count} failed</span>
-              </div>
-            )}
+            {sites.map((site) => {
+              const isActive = activeCrawl?.site_id === site.site_id
+                && activeCrawl.crawl_run_id === site.last_crawl_run_id
+              return (
+                <div className="site-entry" key={site.site_id}>
+                  <article className="crawl-item">
+                    <div className="crawl-icon"><Globe2 size={20} /></div>
+                    <div className="crawl-primary">
+                      <strong>{site.root_url}</strong>
+                      <span>{site.last_crawl_run_id}</span>
+                    </div>
+                    {isActive && crawlStatus && (
+                      <div className={`status-badge status-${crawlStatus.toLowerCase()}`}>
+                        {crawlStatus === 'CRAWLED' || crawlStatus === 'COMPLETED' ? <CheckCircle2 size={15} /> : crawlStatus === 'FAILED' ? <AlertCircle size={15} /> : crawlStatus === 'WORKING' ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
+                        {statusLabel(crawlStatus)}
+                      </div>
+                    )}
+                  </article>
+                  {isActive && activeCrawl.details && (
+                    <div className="crawl-counts">
+                      <span>{activeCrawl.details.discovered_page_count} discovered</span>
+                      <span>{activeCrawl.details.completed_page_count} completed</span>
+                      <span>{activeCrawl.details.failed_page_count} failed</span>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+            {sitesError && <p className="inline-error" role="alert">{sitesError}</p>}
             {pollError && <p className="inline-error" role="alert">{pollError}</p>}
           </div>
+        )}
+        {sitesError && sites.length === 0 && !loadingSites && (
+          <p className="error workspace-error" role="alert">{sitesError}</p>
         )}
       </section>
 

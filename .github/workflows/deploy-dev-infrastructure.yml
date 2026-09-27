@@ -48,9 +48,11 @@ jobs:
         run: |
           account_id=$(aws sts get-caller-identity --query Account --output text)
           bucket="dev-llms-txt-${account_id}-terraform-state"
-          repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_web_crawler"
+          crawler_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_web_crawler"
+          parser_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_html_parser"
           echo "bucket=${bucket}" >> "${GITHUB_OUTPUT}"
-          echo "TF_VAR_web_crawler_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_web_crawler_image_uri=${crawler_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_html_parser_image_uri=${parser_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
 
       - name: Prepare remote state
         env:
@@ -73,10 +75,11 @@ jobs:
       - name: Validate Terraform
         run: terraform -chdir=infrastructure/dev validate
 
-      - name: Provision web crawler container registry
+      - name: Provision Lambda container registries
         run: |
           terraform -chdir=infrastructure/dev plan \
             -target=module.web_crawler_ecr \
+            -target=module.html_parser_ecr \
             -out=ecr.tfplan
           terraform -chdir=infrastructure/dev apply -auto-approve ecr.tfplan
 
@@ -86,6 +89,13 @@ jobs:
           repository=$(terraform -chdir=infrastructure/dev output -raw web_crawler_ecr_repository_url)
           echo "WEB_CRAWLER_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_web_crawler_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Resolve HTML parser image URI
+        shell: bash
+        run: |
+          repository=$(terraform -chdir=infrastructure/dev output -raw html_parser_ecr_repository_url)
+          echo "HTML_PARSER_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_html_parser_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
 
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -101,6 +111,17 @@ jobs:
       - name: Push web crawler image
         run: docker push "${WEB_CRAWLER_IMAGE_URI}"
 
+      - name: Build HTML parser image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --file deployables/dev/lambdas/html_parser/Dockerfile \
+            --tag "${HTML_PARSER_IMAGE_URI}" \
+            .
+
+      - name: Push HTML parser image
+        run: docker push "${HTML_PARSER_IMAGE_URI}"
+
       - name: Plan development infrastructure
         run: terraform -chdir=infrastructure/dev plan -out=tfplan
 
@@ -115,3 +136,6 @@ jobs:
           echo "## Web crawler" >> "${GITHUB_STEP_SUMMARY}"
           echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw web_crawler_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Image: ${WEB_CRAWLER_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## HTML parser" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw html_parser_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Image: ${HTML_PARSER_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"

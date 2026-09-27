@@ -40,7 +40,7 @@ The development configuration creates three encrypted queues:
 - `dev_llms_txt_llm_txt_sqs`
 
 All queues use long polling, retain messages for four days, and have a five-minute visibility timeout.
-The crawl queue moves a message to `dev_llms_txt_crawl_dlq` after five failed receives.
+The crawl and parser queues move failed messages to their respective dead-letter queues after five receives.
 
 ## Development S3
 
@@ -50,6 +50,10 @@ The development configuration creates a private, encrypted, versioned `dev-llms-
 
 The web crawler is deployed as the `dev_llms_txt_web_crawler` Lambda using an image in the immutable `dev_llms_txt_web_crawler` ECR repository. It consumes one crawl message per invocation, stores raw HTML under the S3 `raw/` prefix, updates the crawl-pages table, and publishes successful downloads to the parse queue. Its execution role is limited to those resources.
 
+## Development HTML parser
+
+The parser is deployed as the `dev_llms_txt_html_parser` Lambda using an image in the immutable `dev_llms_txt_html_parser` ECR repository. It consumes the parse queue, stores changed page content under the S3 `parsed/` prefix, rediscovers same-site child links, and publishes those links to the crawl queue. When every page in a crawl is terminal, it publishes the run to the `llm_txt` queue.
+
 ## GitHub Actions deployment
 
 Pushes to `feature/**` and `dev` run `.github/workflows/deploy-dev-infrastructure.yml`. The workflow:
@@ -57,10 +61,10 @@ Pushes to `feature/**` and `dev` run `.github/workflows/deploy-dev-infrastructur
 1. Assumes the AWS deployment role through GitHub OIDC.
 2. Creates the encrypted, versioned development state bucket if it does not exist.
 3. Initializes Terraform with S3 state and native state locking.
-4. Provisions the ECR repository in a targeted bootstrap apply.
-5. Builds the web crawler image and pushes it with the Git commit SHA as its immutable tag.
+4. Provisions both Lambda ECR repositories in a targeted bootstrap apply.
+5. Builds the crawler and parser images and pushes them with the Git commit SHA as their immutable tag.
 6. Plans and applies the complete development infrastructure using that image.
-7. Writes Cognito and crawler deployment details to the workflow summary.
+7. Writes Cognito, crawler, and parser deployment details to the workflow summary.
 
 The GitHub `dev` environment must define:
 

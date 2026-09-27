@@ -25,6 +25,10 @@ Each image is tagged with its Git commit SHA and pushed to the environment's ECR
 }
 ```
 
+The parser message includes `unchanged`. When it is `true`, the parser reuses
+`raw_html_s3_key`, skips content extraction, and only extracts links to enqueue
+for crawling.
+
 ## Environment
 
 - `AWS_REGION`

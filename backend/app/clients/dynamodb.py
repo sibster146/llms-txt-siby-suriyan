@@ -6,6 +6,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
+from botocore.exceptions import ClientError
+
 
 def to_dynamodb_value(value: Any) -> Any:
     """Convert Python domain values into values accepted by boto3 DynamoDB."""
@@ -40,15 +42,40 @@ class DynamoDBClientError(Exception):
         self.code = code
 
 
+class DynamoDBConditionNotMetError(DynamoDBClientError):
+    """Raised when a conditional DynamoDB write is intentionally rejected."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="DYNAMODB_CONDITION_NOT_MET")
+
+
 class DynamoDBClient:
     """Small application wrapper around one boto3 DynamoDB table resource."""
 
     def __init__(self, table: Any) -> None:
         self.table = table
 
-    def put_item(self, item: dict[str, Any]) -> None:
+    def put_item(
+        self,
+        item: dict[str, Any],
+        condition_expression: Any = None,
+    ) -> None:
+        kwargs: dict[str, Any] = {"Item": to_dynamodb_value(item)}
+        if condition_expression is not None:
+            kwargs["ConditionExpression"] = condition_expression
         try:
-            self.table.put_item(Item=to_dynamodb_value(item))
+            self.table.put_item(**kwargs)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == (
+                "ConditionalCheckFailedException"
+            ):
+                raise DynamoDBConditionNotMetError(
+                    "DynamoDB put condition was not met."
+                ) from error
+            raise DynamoDBClientError(
+                message=f"Failed to put item into DynamoDB: {error}",
+                code="DYNAMODB_PUT_ITEM_FAILED",
+            ) from error
         except Exception as error:
             raise DynamoDBClientError(
                 message=f"Failed to put item into DynamoDB: {error}",
@@ -151,6 +178,17 @@ class DynamoDBClient:
 
         try:
             response = self.table.update_item(**kwargs)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == (
+                "ConditionalCheckFailedException"
+            ):
+                raise DynamoDBConditionNotMetError(
+                    "DynamoDB update condition was not met."
+                ) from error
+            raise DynamoDBClientError(
+                message=f"Failed to update item in DynamoDB: {error}",
+                code="DYNAMODB_UPDATE_ITEM_FAILED",
+            ) from error
         except Exception as error:
             raise DynamoDBClientError(
                 message=f"Failed to update item in DynamoDB: {error}",

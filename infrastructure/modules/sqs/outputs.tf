@@ -29,6 +29,7 @@ output "dead_letter_queue_names" {
   description = "Dead-letter queue names keyed by workflow stage."
   value = {
     crawl = aws_sqs_queue.crawl_dlq.name
+    parse = aws_sqs_queue.parse_dlq.name
   }
 }
 
@@ -36,5 +37,6 @@ output "dead_letter_queue_arns" {
   description = "Dead-letter queue ARNs keyed by workflow stage."
   value = {
     crawl = aws_sqs_queue.crawl_dlq.arn
+    parse = aws_sqs_queue.parse_dlq.arn
   }
 }

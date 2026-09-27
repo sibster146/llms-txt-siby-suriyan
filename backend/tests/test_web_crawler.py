@@ -13,12 +13,20 @@ from app.services.web_crawler import (
 
 
 class FakeCrawlPagesTable:
-    def __init__(self, existing: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        existing: dict[str, Any] | None = None,
+        previous: dict[str, Any] | None = None,
+    ) -> None:
         self.existing = existing
+        self.previous = previous
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def get(self, **_: Any) -> dict[str, Any] | None:
         return self.existing
+
+    def get_latest_crawled(self, **_: Any) -> dict[str, Any] | None:
+        return self.previous
 
     def mark_crawling(self, **kwargs: Any) -> None:
         self.calls.append(("mark_crawling", kwargs))
@@ -38,6 +46,14 @@ class FakeCrawlRunsTable:
         self.calls: list[dict[str, Any]] = []
 
     def update_status(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
+
+
+class FakeSitesTable:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def mark_content_changed(self, **kwargs: Any) -> None:
         self.calls.append(kwargs)
 
 
@@ -78,6 +94,7 @@ def _service(
     *,
     robots_allowed: bool = True,
     crawl_runs: FakeCrawlRunsTable | None = None,
+    sites: FakeSitesTable | None = None,
 ) -> WebCrawlerService:
     def fetch_page(*_: Any) -> FetchedPage:
         return FetchedPage(
@@ -91,6 +108,7 @@ def _service(
     return WebCrawlerService(
         crawl_pages=crawl_pages,
         crawl_runs=crawl_runs or FakeCrawlRunsTable(),
+        sites=sites or FakeSitesTable(),
         s3=s3,
         sqs_client=sqs,
         parse_queue_url="https://sqs.example/parse",
@@ -108,8 +126,15 @@ def test_crawler_stores_html_and_queues_parsing() -> None:
     s3 = FakeS3Client()
     sqs = FakeSQSClient()
     crawl_runs = FakeCrawlRunsTable()
+    sites = FakeSitesTable()
 
-    _service(crawl_pages, s3, sqs, crawl_runs=crawl_runs).process_message(_message())
+    _service(
+        crawl_pages,
+        s3,
+        sqs,
+        crawl_runs=crawl_runs,
+        sites=sites,
+    ).process_message(_message())
 
     key = next(iter(s3.objects))
     assert key.startswith("raw/site-1/crawl-1/")
@@ -123,6 +148,39 @@ def test_crawler_stores_html_and_queues_parsing() -> None:
     queued = json.loads(sqs.messages[0]["MessageBody"])
     assert queued["action"] == "parse_page"
     assert queued["payload"]["raw_html_s3_key"] == key
+    assert queued["payload"]["unchanged"] is False
+    assert crawl_pages.calls[1][1]["raw_html_hash"] == sha256(
+        s3.objects[key]
+    ).hexdigest()
+    assert crawl_pages.calls[1][1]["html_unchanged"] is False
+    assert sites.calls[0]["crawl_run_id"] == "crawl-1"
+    assert "modified_at" in sites.calls[0]
+
+
+def test_crawler_reuses_previous_html_when_content_is_unchanged() -> None:
+    content = b"<html><title>Example</title></html>"
+    previous_key = "raw/site-1/crawl-old/page.html"
+    crawl_pages = FakeCrawlPagesTable(
+        existing={"status": "PENDING"},
+        previous={
+            "raw_html_hash": sha256(content).hexdigest(),
+            "raw_html_s3_key": previous_key,
+        },
+    )
+    s3 = FakeS3Client()
+    sqs = FakeSQSClient()
+    sites = FakeSitesTable()
+
+    _service(crawl_pages, s3, sqs, sites=sites).process_message(_message())
+
+    assert s3.objects == {}
+    crawled = crawl_pages.calls[1][1]
+    assert crawled["raw_html_s3_key"] == previous_key
+    assert crawled["html_unchanged"] is True
+    queued = json.loads(sqs.messages[0]["MessageBody"])
+    assert queued["payload"]["raw_html_s3_key"] == previous_key
+    assert queued["payload"]["unchanged"] is True
+    assert sites.calls == []
 
 
 def test_crawler_reuses_stored_html_when_queue_delivery_is_retried() -> None:
@@ -131,6 +189,7 @@ def test_crawler_reuses_stored_html_when_queue_delivery_is_retried() -> None:
             "status": "PENDING",
             "raw_html_s3_key": "raw/site-1/crawl-1/page.html",
             "final_url": "https://example.com/",
+            "html_unchanged": True,
         }
     )
     s3 = FakeS3Client()
@@ -141,6 +200,7 @@ def test_crawler_reuses_stored_html_when_queue_delivery_is_retried() -> None:
     assert s3.objects == {}
     assert [name for name, _ in crawl_pages.calls] == ["mark_parse_pending"]
     assert len(sqs.messages) == 1
+    assert json.loads(sqs.messages[0]["MessageBody"])["payload"]["unchanged"] is True
 
 
 def test_crawler_repairs_run_status_after_parse_was_already_queued() -> None:
