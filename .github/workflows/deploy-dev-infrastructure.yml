@@ -1,0 +1,84 @@
+name: Deploy development infrastructure
+
+on:
+  push:
+    branches:
+      - dev
+      - 'feature/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Terraform apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: terraform-dev-${{ github.run_id }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
+
+      - name: Resolve state bucket
+        id: state
+        shell: bash
+        run: |
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          bucket="dev-llms-txt-${account_id}-terraform-state"
+          echo "bucket=${bucket}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare remote state
+        env:
+          STATE_BUCKET: ${{ steps.state.outputs.bucket }}
+        run: bash infrastructure/scripts/ensure-state-bucket.sh
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive infrastructure
+
+      - name: Initialize Terraform
+        run: |
+          terraform -chdir=infrastructure/dev init \
+            -reconfigure \
+            -backend-config="bucket=${{ steps.state.outputs.bucket }}" \
+            -backend-config="key=dev/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Validate Terraform
+        run: terraform -chdir=infrastructure/dev validate
+
+      - name: Plan development infrastructure
+        run: terraform -chdir=infrastructure/dev plan -out=tfplan
+
+      - name: Apply development infrastructure
+        run: terraform -chdir=infrastructure/dev apply -auto-approve tfplan
+
+      - name: Publish Cognito outputs
+        run: |
+          echo "## Development Cognito" >> "${GITHUB_STEP_SUMMARY}"
+          echo "User pool: $(terraform -chdir=infrastructure/dev output -raw cognito_user_pool_id)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Web client: $(terraform -chdir=infrastructure/dev output -raw cognito_web_client_id)" >> "${GITHUB_STEP_SUMMARY}"
