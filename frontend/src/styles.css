@@ -223,7 +223,7 @@ label {
 }
 
 .input-wrap + label,
-.field-hint + label {
+.password-policy + label {
   margin-top: 19px;
 }
 
@@ -272,11 +272,41 @@ label {
   font-weight: 650;
 }
 
-.field-hint {
-  margin: 8px 0 0;
-  color: #7a837b;
+.password-policy {
+  margin-top: 14px;
+}
+
+.password-policy > p {
+  margin: 0 0 8px;
+  color: #59635b;
   font-size: 12px;
-  line-height: 1.5;
+  font-weight: 650;
+}
+
+.password-policy ul {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.password-policy li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #8a928b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.password-policy li.met {
+  color: #24734b;
+}
+
+.password-policy svg {
+  flex: 0 0 auto;
 }
 
 .error,
@@ -465,5 +495,9 @@ input:focus-visible {
 
   .auth-heading h2 {
     font-size: 27px;
+  }
+
+  .password-policy ul {
+    grid-template-columns: 1fr;
   }
 }

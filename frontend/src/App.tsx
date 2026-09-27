@@ -2,6 +2,8 @@ import { type FormEvent, useEffect, useState } from 'react'
 import {
   ArrowRight,
   Check,
+  CheckCircle2,
+  Circle,
   FileText,
   Globe2,
   LoaderCircle,
@@ -19,7 +21,7 @@ import {
   finishPasswordReset,
   startPasswordReset,
 } from './lib/auth'
-import { passwordIssues } from './lib/validation'
+import { passwordIssues, passwordRequirements } from './lib/validation'
 
 type AuthView = 'sign-in' | 'sign-up' | 'forgot-password' | 'reset-password'
 
@@ -47,6 +49,10 @@ export function App({ isConfigured }: AppProps) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const showsPasswordPolicy = view === 'sign-up' || view === 'reset-password'
+  const requirements = passwordRequirements(password)
+  const passwordsMatch = confirmPassword.length > 0 && password === confirmPassword
+  const passwordIsReady = requirements.every((requirement) => requirement.isMet) && passwordsMatch
 
   useEffect(() => {
     if (!isConfigured) return
@@ -242,6 +248,7 @@ export function App({ isConfigured }: AppProps) {
                   <input
                     autoComplete={view === 'sign-in' ? 'current-password' : 'new-password'}
                     id="password"
+                    maxLength={256}
                     minLength={12}
                     onChange={(event) => setPassword(event.target.value)}
                     required
@@ -260,6 +267,7 @@ export function App({ isConfigured }: AppProps) {
                   <input
                     autoComplete="new-password"
                     id="confirm-password"
+                    maxLength={256}
                     minLength={12}
                     onChange={(event) => setConfirmPassword(event.target.value)}
                     required
@@ -267,14 +275,22 @@ export function App({ isConfigured }: AppProps) {
                     value={confirmPassword}
                   />
                 </div>
-                <p className="field-hint">12+ characters with upper, lower, number, and symbol.</p>
+                <PasswordChecklist
+                  confirmPassword={confirmPassword}
+                  passwordsMatch={passwordsMatch}
+                  password={password}
+                />
               </>
             )}
 
             {notice && <p className="notice" role="status">{notice}</p>}
             {error && <p className="error" role="alert">{error}</p>}
 
-            <button className="primary-button" disabled={submitting} type="submit">
+            <button
+              className="primary-button"
+              disabled={submitting || (showsPasswordPolicy && !passwordIsReady)}
+              type="submit"
+            >
               {submitting ? <LoaderCircle className="spin" size={18} /> : <ArrowRight size={18} />}
               {submitLabel(view)}
             </button>
@@ -288,6 +304,36 @@ export function App({ isConfigured }: AppProps) {
         </div>
       </section>
     </main>
+  )
+}
+
+function PasswordChecklist({
+  confirmPassword,
+  passwordsMatch,
+  password,
+}: {
+  confirmPassword: string
+  passwordsMatch: boolean
+  password: string
+}) {
+  const requirements = passwordRequirements(password)
+
+  return (
+    <div className="password-policy" aria-live="polite">
+      <p>Password requirements</p>
+      <ul>
+        {requirements.map((requirement) => (
+          <li className={requirement.isMet ? 'met' : ''} key={requirement.id}>
+            {requirement.isMet ? <CheckCircle2 size={15} /> : <Circle size={15} />}
+            {requirement.label}
+          </li>
+        ))}
+        <li className={passwordsMatch ? 'met' : ''}>
+          {passwordsMatch ? <CheckCircle2 size={15} /> : <Circle size={15} />}
+          {confirmPassword ? 'Passwords match' : 'Matching confirmation'}
+        </li>
+      </ul>
+    </div>
   )
 }
 

@@ -19,6 +19,32 @@ The development configuration creates:
 
 No Cognito domain or managed login UI is created. The application owns the sign-in, sign-out, and forgot-password pages. Cognito sends password-reset codes to users whose backend-created accounts have `email_verified` set to `true`.
 
+## Development DynamoDB
+
+The development configuration creates on-demand tables for:
+
+- Sites
+- User-to-site mappings
+- Crawl runs
+- Pages processed during each crawl
+- Generated `llms.txt` versions
+
+Development table names begin with `dev_llms_txt_`. Point-in-time recovery and deletion protection are disabled in development and can be enabled when the module is used by production.
+
+## Development SQS
+
+The development configuration creates three encrypted queues:
+
+- `dev_llms_txt_crawl_sqs`
+- `dev_llms_txt_parse_sqs`
+- `dev_llms_txt_llm_txt_sqs`
+
+All queues use long polling, retain messages for four days, and have a five-minute visibility timeout.
+
+## Development S3
+
+The development configuration creates a private, encrypted, versioned `dev-llms-txt-s3-<account-id>` bucket for raw HTML, parsed Markdown, and generated `llms.txt` files. Its `Name` tag is `dev_llms_txt_s3`. The account ID keeps the globally scoped bucket name unique.
+
 ## GitHub Actions deployment
 
 Pushes to `feature/**` and `dev` run `.github/workflows/deploy-dev-infrastructure.yml`. The workflow:

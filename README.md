@@ -16,7 +16,7 @@ Development infrastructure is provisioned only by GitHub Actions. Commit and pus
 git push origin feature/setup
 ```
 
-The `Deploy development infrastructure` workflow creates the remote state bucket, applies Terraform, and publishes the Cognito IDs in its job summary. See `infrastructure/README.md` for the required GitHub environment variables and IAM policy.
+The `Deploy Dev` workflow creates the remote state bucket, applies Terraform, and publishes the Cognito IDs in its job summary. See `infrastructure/README.md` for the required GitHub environment variables and IAM policy.
 
 ## Run the backend
 

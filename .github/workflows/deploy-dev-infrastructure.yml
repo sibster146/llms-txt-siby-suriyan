@@ -1,4 +1,4 @@
-name: Deploy development infrastructure
+name: Deploy Dev
 
 on:
   push:
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Terraform apply
+    name: Creating Infrastructure
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: dev

@@ -11,7 +11,7 @@
         "s3:GetEncryptionConfiguration",
         "s3:GetObject",
         "s3:ListBucket",
-        "s3:PutBucketEncryption",
+        "s3:PutEncryptionConfiguration",
         "s3:PutBucketPublicAccessBlock",
         "s3:PutBucketVersioning",
         "s3:PutObject",
@@ -27,6 +27,42 @@
       "Effect": "Allow",
       "Action": "cognito-idp:*",
       "Resource": "*"
+    },
+    {
+      "Sid": "ListDynamoDBTables",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:DescribeLimits",
+        "dynamodb:ListTables"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageDevelopmentDynamoDB",
+      "Effect": "Allow",
+      "Action": "dynamodb:*",
+      "Resource": "arn:aws:dynamodb:*:*:table/dev_llms_txt_*"
+    },
+    {
+      "Sid": "ListSQSQueues",
+      "Effect": "Allow",
+      "Action": "sqs:ListQueues",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageDevelopmentSQS",
+      "Effect": "Allow",
+      "Action": "sqs:*",
+      "Resource": "arn:aws:sqs:*:*:dev_llms_txt_*"
+    },
+    {
+      "Sid": "ManageDevelopmentApplicationBucket",
+      "Effect": "Allow",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::dev-llms-txt-s3-*",
+        "arn:aws:s3:::dev-llms-txt-s3-*/*"
+      ]
     }
   ]
 }
