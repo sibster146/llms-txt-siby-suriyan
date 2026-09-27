@@ -9,3 +9,8 @@ variable "project_name" {
   type        = string
   default     = "llms_txt"
 }
+
+variable "web_crawler_image_uri" {
+  description = "Commit-tagged ECR image URI for the web crawler Lambda."
+  type        = string
+}

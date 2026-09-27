@@ -15,7 +15,9 @@ class Settings(BaseSettings):
         pattern=r"^[a-z0-9_]+$",
     )
     application_s3_bucket: str = Field(alias="APPLICATION_S3_BUCKET", min_length=3)
+    crawl_queue_url: str = Field(alias="CRAWL_QUEUE_URL", min_length=1)
     cognito_user_pool_id: str = Field(alias="COGNITO_USER_POOL_ID", min_length=1)
+    cognito_app_client_id: str = Field(alias="COGNITO_APP_CLIENT_ID", min_length=1)
     cors_origins: str = Field(alias="CORS_ORIGINS", min_length=1)
 
     @property

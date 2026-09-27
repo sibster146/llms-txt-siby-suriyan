@@ -47,3 +47,18 @@ output "application_s3_bucket_arn" {
   description = "Development application storage bucket ARN."
   value       = module.s3.bucket_arn
 }
+
+output "web_crawler_ecr_repository_url" {
+  description = "ECR repository used by the web crawler Lambda."
+  value       = module.web_crawler_ecr.repository_url
+}
+
+output "web_crawler_lambda_name" {
+  description = "Development web crawler Lambda function name."
+  value       = module.web_crawler_lambda.function_name
+}
+
+output "web_crawler_lambda_arn" {
+  description = "Development web crawler Lambda function ARN."
+  value       = module.web_crawler_lambda.function_arn
+}

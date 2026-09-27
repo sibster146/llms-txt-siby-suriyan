@@ -2,7 +2,10 @@ from contextlib import suppress
 from typing import Any
 
 import boto3
+import jwt
 from botocore.exceptions import ClientError
+from jwt import PyJWKClient
+from jwt.exceptions import PyJWTError
 
 from app.configs.config import Settings
 
@@ -21,6 +24,49 @@ class InvalidUserPasswordError(CognitoClientError):
 
 class CognitoRateLimitError(CognitoClientError):
     """Raised when Cognito throttles a request."""
+
+
+class InvalidCognitoTokenError(CognitoClientError):
+    """Raised when a Cognito access token cannot be trusted."""
+
+
+class CognitoTokenVerifier:
+    def __init__(self, settings: Settings, jwks_client: PyJWKClient | None = None) -> None:
+        self._app_client_id = settings.cognito_app_client_id
+        self._issuer = (
+            f"https://cognito-idp.{settings.aws_region}.amazonaws.com/"
+            f"{settings.cognito_user_pool_id}"
+        )
+        self._jwks_client = jwks_client or PyJWKClient(
+            f"{self._issuer}/.well-known/jwks.json",
+            cache_keys=True,
+        )
+
+    def verify_access_token(self, token: str) -> str:
+        try:
+            signing_key = self._jwks_client.get_signing_key_from_jwt(token)
+            claims = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                issuer=self._issuer,
+                options={
+                    "verify_aud": False,
+                    "require": ["exp", "iat", "iss", "sub", "token_use", "client_id"],
+                },
+            )
+        except PyJWTError as error:
+            raise InvalidCognitoTokenError from error
+
+        if claims["token_use"] != "access":
+            raise InvalidCognitoTokenError
+        if claims["client_id"] != self._app_client_id:
+            raise InvalidCognitoTokenError
+
+        user_id = claims["sub"]
+        if not isinstance(user_id, str) or not user_id:
+            raise InvalidCognitoTokenError
+        return user_id
 
 
 class CognitoClient:

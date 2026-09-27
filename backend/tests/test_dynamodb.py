@@ -80,7 +80,12 @@ def test_settings_build_environment_specific_table_names(
     monkeypatch.setenv("ENVIRONMENT", environment)
     monkeypatch.setenv("PROJECT_NAME", "llms_txt")
     monkeypatch.setenv("APPLICATION_S3_BUCKET", "dev-llms-txt-s3-test")
+    monkeypatch.setenv(
+        "CRAWL_QUEUE_URL",
+        "https://sqs.us-east-1.amazonaws.com/123456789012/dev_llms_txt_crawl_sqs",
+    )
     monkeypatch.setenv("COGNITO_USER_POOL_ID", "test-pool")
+    monkeypatch.setenv("COGNITO_APP_CLIENT_ID", "test-client")
     monkeypatch.setenv("CORS_ORIGINS", "http://localhost:5173")
     settings = Settings()
 

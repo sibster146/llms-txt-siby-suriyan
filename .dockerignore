@@ -1,0 +1,10 @@
+**
+!backend/
+!backend/app/
+!backend/app/**
+!deployables/
+!deployables/dev/
+!deployables/dev/lambdas/
+!deployables/dev/lambdas/web_crawler/
+!deployables/dev/lambdas/web_crawler/Dockerfile
+!deployables/dev/lambdas/web_crawler/handler.py

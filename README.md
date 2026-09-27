@@ -20,7 +20,9 @@ The `Deploy Dev` workflow creates the remote state bucket, applies Terraform, an
 
 ## Run the backend
 
-Create `backend/.env` from `backend/.env.example` and set `COGNITO_USER_POOL_ID` from the Terraform output.
+Create `backend/.env` from `backend/.env.example`. Set `COGNITO_USER_POOL_ID` from
+`cognito_user_pool_id`, `COGNITO_APP_CLIENT_ID` from `cognito_web_client_id`, and
+`CRAWL_QUEUE_URL` from the `crawl` value in `sqs_queue_urls`.
 
 ```bash
 source venv/bin/activate

@@ -19,7 +19,7 @@ jobs:
   deploy:
     name: Creating Infrastructure
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment: dev
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -48,7 +48,9 @@ jobs:
         run: |
           account_id=$(aws sts get-caller-identity --query Account --output text)
           bucket="dev-llms-txt-${account_id}-terraform-state"
+          repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_web_crawler"
           echo "bucket=${bucket}" >> "${GITHUB_OUTPUT}"
+          echo "TF_VAR_web_crawler_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
 
       - name: Prepare remote state
         env:
@@ -71,6 +73,34 @@ jobs:
       - name: Validate Terraform
         run: terraform -chdir=infrastructure/dev validate
 
+      - name: Provision web crawler container registry
+        run: |
+          terraform -chdir=infrastructure/dev plan \
+            -target=module.web_crawler_ecr \
+            -out=ecr.tfplan
+          terraform -chdir=infrastructure/dev apply -auto-approve ecr.tfplan
+
+      - name: Resolve web crawler image URI
+        shell: bash
+        run: |
+          repository=$(terraform -chdir=infrastructure/dev output -raw web_crawler_ecr_repository_url)
+          echo "WEB_CRAWLER_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_web_crawler_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build web crawler image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --file deployables/dev/lambdas/web_crawler/Dockerfile \
+            --tag "${WEB_CRAWLER_IMAGE_URI}" \
+            .
+
+      - name: Push web crawler image
+        run: docker push "${WEB_CRAWLER_IMAGE_URI}"
+
       - name: Plan development infrastructure
         run: terraform -chdir=infrastructure/dev plan -out=tfplan
 
@@ -82,3 +112,6 @@ jobs:
           echo "## Development Cognito" >> "${GITHUB_STEP_SUMMARY}"
           echo "User pool: $(terraform -chdir=infrastructure/dev output -raw cognito_user_pool_id)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Web client: $(terraform -chdir=infrastructure/dev output -raw cognito_web_client_id)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## Web crawler" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw web_crawler_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Image: ${WEB_CRAWLER_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"

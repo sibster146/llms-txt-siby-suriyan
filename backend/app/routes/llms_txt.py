@@ -1,3 +1,4 @@
+from contextlib import suppress
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Annotated
@@ -8,9 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import HttpUrl
 
 from app.clients.dynamodb import DynamoDBClientError
+from app.clients.sqs import SQSClient, SQSClientError
 from app.configs.dependencies import (
     get_crawl_pages_table,
+    get_crawl_queue_client,
     get_crawl_runs_table,
+    get_current_user_id,
     get_sites_table,
     get_user_sites_table,
 )
@@ -38,10 +42,12 @@ def _canonicalize_url(url: HttpUrl) -> str:
 @router.post("", response_model=CreateLlmsTxtResponse, status_code=status.HTTP_201_CREATED)
 def create_llms_txt(
     payload: CreateLlmsTxtRequest,
+    user_id: Annotated[str, Depends(get_current_user_id)],
     sites: Annotated[SitesTable, Depends(get_sites_table)],
     user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
     crawl_runs: Annotated[CrawlRunsTable, Depends(get_crawl_runs_table)],
     crawl_pages: Annotated[CrawlPagesTable, Depends(get_crawl_pages_table)],
+    crawl_queue: Annotated[SQSClient, Depends(get_crawl_queue_client)],
 ) -> CreateLlmsTxtResponse:
     canonical_url = _canonicalize_url(payload.url)
     canonical_url_hash = sha256(canonical_url.encode()).hexdigest()
@@ -57,7 +63,7 @@ def create_llms_txt(
             timestamp=created_at,
         )
         user_sites.add(
-            user_id=payload.user_id,
+            user_id=user_id,
             site_id=site_id,
             created_at=created_at,
         )
@@ -78,6 +84,32 @@ def create_llms_txt(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The crawl request could not be saved.",
+        ) from error
+
+    try:
+        crawl_queue.send_json(
+            {
+                "action": "crawl_url",
+                "payload": {
+                    "site_id": site_id,
+                    "crawl_run_id": crawl_run_id,
+                    "url": canonical_url,
+                    "canonical_url_hash": canonical_url_hash,
+                    "depth": 0,
+                },
+            }
+        )
+    except SQSClientError as error:
+        with suppress(DynamoDBClientError):
+            crawl_runs.update_status(
+                site_id=site_id,
+                crawl_run_id=crawl_run_id,
+                crawl_status="FAILED",
+                updated_at=datetime.now(UTC).isoformat(),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The crawl request was saved but could not be queued.",
         ) from error
 
     return CreateLlmsTxtResponse(

@@ -37,6 +37,12 @@ variable "visibility_timeout_seconds" {
   default     = 300
 }
 
+variable "max_receive_count" {
+  description = "Number of failed receives before a message moves to its dead-letter queue."
+  type        = number
+  default     = 5
+}
+
 variable "tags" {
   description = "Additional tags applied to SQS queues."
   type        = map(string)
