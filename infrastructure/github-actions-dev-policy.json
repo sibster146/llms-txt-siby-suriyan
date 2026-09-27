@@ -122,13 +122,18 @@
       "Action": [
         "logs:CreateLogGroup",
         "logs:DeleteLogGroup",
-        "logs:DescribeLogGroups",
         "logs:ListTagsForResource",
         "logs:PutRetentionPolicy",
         "logs:TagResource",
         "logs:UntagResource"
       ],
       "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/dev_llms_txt_*"
+    },
+    {
+      "Sid": "DescribeCloudWatchLogGroups",
+      "Effect": "Allow",
+      "Action": "logs:DescribeLogGroups",
+      "Resource": "*"
     }
   ]
 }
