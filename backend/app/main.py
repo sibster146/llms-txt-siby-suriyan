@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.configs.config import get_settings
-from app.routes import account_management, health
+from app.routes import account_management, health, llms_txt
 
 settings = get_settings()
 
@@ -23,3 +23,4 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(account_management.router)
+app.include_router(llms_txt.router)
