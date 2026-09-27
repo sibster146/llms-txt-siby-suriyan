@@ -32,6 +32,7 @@ ACTIVE_PAGE_STATUSES = {
     "CRAWLING",
     "CRAWLED",
     "PARSE_PENDING",
+    "PARSING",
 }
 
 

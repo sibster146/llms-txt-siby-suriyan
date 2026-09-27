@@ -136,6 +136,21 @@ def test_crawl_pages_table_loads_latest_crawled_version() -> None:
     assert dynamodb.queries[0]["Limit"] == 1
 
 
+def test_crawl_pages_table_claims_parsing_atomically() -> None:
+    dynamodb = RecordingDynamoDBClient()
+
+    claimed = CrawlPagesTable(dynamodb).claim_parsing(
+        crawl_run_id="crawl-1",
+        canonical_url_hash="hash-1",
+        started_at="2026-09-27T22:00:00+00:00",
+        stale_before="2026-09-27T21:58:00+00:00",
+    )
+
+    assert claimed
+    assert dynamodb.updates[0]["expression_attribute_values"][":parsing"] == "PARSING"
+    assert dynamodb.updates[0]["condition_expression"] is not None
+
+
 def test_crawl_runs_table_records_parser_progress() -> None:
     dynamodb = RecordingDynamoDBClient()
 

@@ -242,6 +242,38 @@ class CrawlPagesTable:
         except DynamoDBConditionNotMetError:
             return
 
+    def claim_parsing(
+        self,
+        *,
+        crawl_run_id: str,
+        canonical_url_hash: str,
+        started_at: str,
+        stale_before: str,
+    ) -> bool:
+        try:
+            self.dynamodb.update_item(
+                key={
+                    "crawl_run_id": crawl_run_id,
+                    "canonical_url_hash": canonical_url_hash,
+                },
+                update_expression=(
+                    "SET #status = :parsing, parse_started_at = :started_at, "
+                    "updated_at = :started_at"
+                ),
+                expression_attribute_names={"#status": "status"},
+                expression_attribute_values={
+                    ":parsing": "PARSING",
+                    ":started_at": started_at,
+                },
+                condition_expression=(
+                    Attr("status").is_in(["CRAWLED", "PARSE_PENDING"])
+                    | (Attr("status").eq("PARSING") & Attr("parse_started_at").lt(stale_before))
+                ),
+            )
+        except DynamoDBConditionNotMetError:
+            return False
+        return True
+
     def mark_queued(
         self,
         *,

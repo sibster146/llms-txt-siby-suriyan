@@ -4,7 +4,7 @@ import json
 import posixpath
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -64,7 +64,9 @@ ACTIVE_PAGE_STATUSES = {
     "CRAWLING",
     "CRAWLED",
     "PARSE_PENDING",
+    "PARSING",
 }
+PARSING_LEASE_SECONDS = 120
 HTML_CONTENT_TYPES = {"application/xhtml+xml", "text/html"}
 MARKDOWN_CONTENT_TYPES = {"text/markdown", "text/x-markdown"}
 
@@ -151,12 +153,25 @@ class HtmlParserService:
         if page_record.get("status") == "PARSED":
             self._publish_generation_if_complete(request)
             return
+        if page_record.get("status") == "FAILED":
+            self._publish_generation_if_complete(request)
+            return
 
         raw_html_hash = str(page_record.get("raw_html_hash", ""))
         if not SHA256_PATTERN.fullmatch(raw_html_hash):
             raise HtmlParserError("CrawlPages record is missing raw_html_hash")
         if page_record.get("raw_html_s3_key") != request.raw_html_s3_key:
             raise HtmlParserError("Parser message does not match the stored raw HTML key")
+
+        started_at = datetime.now(UTC)
+        claimed = self.crawl_pages.claim_parsing(
+            crawl_run_id=request.crawl_run_id,
+            canonical_url_hash=request.canonical_url_hash,
+            started_at=started_at.isoformat(),
+            stale_before=(started_at - timedelta(seconds=PARSING_LEASE_SECONDS)).isoformat(),
+        )
+        if not claimed:
+            return
 
         try:
             raw_html = self.s3.get_bytes(request.raw_html_s3_key)

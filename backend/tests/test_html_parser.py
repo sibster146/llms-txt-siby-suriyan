@@ -17,6 +17,7 @@ class FakeCrawlPagesTable:
     def __init__(self, root: dict[str, Any]) -> None:
         self.pages = {(str(root["crawl_run_id"]), str(root["canonical_url_hash"])): root}
         self.failures: list[dict[str, Any]] = []
+        self.claims = 0
 
     def get(self, *, crawl_run_id: str, canonical_url_hash: str) -> dict[str, Any] | None:
         return self.pages.get((crawl_run_id, canonical_url_hash))
@@ -26,6 +27,20 @@ class FakeCrawlPagesTable:
         if key in self.pages:
             return False
         self.pages[key] = {**kwargs, "status": "DISCOVERED"}
+        return True
+
+    def claim_parsing(
+        self,
+        *,
+        crawl_run_id: str,
+        canonical_url_hash: str,
+        **_: Any,
+    ) -> bool:
+        page = self.pages[(crawl_run_id, canonical_url_hash)]
+        if page["status"] not in {"CRAWLED", "PARSE_PENDING"}:
+            return False
+        page["status"] = "PARSING"
+        self.claims += 1
         return True
 
     def mark_queued(self, *, crawl_run_id: str, canonical_url_hash: str, **_: Any) -> None:
@@ -193,6 +208,21 @@ def test_parser_extracts_content_and_queues_only_crawlable_same_site_links() -> 
     ]
     assert len(pages.pages) == 2
     assert llm_queue.messages == []
+
+
+def test_parser_does_not_count_a_page_when_another_delivery_claimed_it() -> None:
+    raw_html = b"<html><body><main>Content</main></body></html>"
+    service, pages, s3, crawl_queue, llm_queue = _service(raw_html)
+    root = next(iter(pages.pages.values()))
+    root["status"] = "PARSING"
+
+    service.process_message(_message())
+
+    assert pages.claims == 0
+    assert s3.writes == []
+    assert crawl_queue.messages == []
+    assert llm_queue.messages == []
+    assert service.crawl_runs.calls == []
 
 
 def test_unchanged_page_reuses_parsed_content_but_rediscovers_links() -> None:
