@@ -14,7 +14,6 @@ import { Brand } from '../components/Brand'
 import {
   type CrawlStatus,
   type CrawlStatusResponse,
-  type CreateCrawlResponse,
   type SiteSummary,
   createCrawl,
   getCrawlStatus,
@@ -27,15 +26,11 @@ interface HomePageProps {
   user: AuthenticatedUser
 }
 
-interface ActiveCrawl extends Omit<CreateCrawlResponse, 'status'> {
-  status: CrawlStatus
-  details?: CrawlStatusResponse
-}
-
-const terminalStatuses: CrawlStatus[] = ['CRAWLED', 'COMPLETED', 'FAILED']
+const terminalStatuses: CrawlStatus[] = ['GENERATION_QUEUED', 'COMPLETED', 'FAILED']
 
 function statusLabel(status: CrawlStatus): string {
-  return status.charAt(0) + status.slice(1).toLowerCase()
+  const label = status.toLowerCase().replaceAll('_', ' ')
+  return label.charAt(0).toUpperCase() + label.slice(1)
 }
 
 export function HomePage({ onSignOut, user }: HomePageProps) {
@@ -48,10 +43,6 @@ export function HomePage({ onSignOut, user }: HomePageProps) {
   const [sitesError, setSitesError] = useState('')
   const [loadingSites, setLoadingSites] = useState(true)
   const [sites, setSites] = useState<SiteSummary[]>([])
-  const [activeCrawl, setActiveCrawl] = useState<ActiveCrawl | null>(null)
-  const activeSiteId = activeCrawl?.site_id
-  const activeCrawlRunId = activeCrawl?.crawl_run_id
-  const crawlStatus = activeCrawl?.status
 
   useEffect(() => {
     let cancelled = false
@@ -86,38 +77,50 @@ export function HomePage({ onSignOut, user }: HomePageProps) {
   }, [creating, modalOpen])
 
   useEffect(() => {
-    if (!activeSiteId || !activeCrawlRunId || !crawlStatus || terminalStatuses.includes(crawlStatus)) return
-    const siteId = activeSiteId
-    const crawlRunId = activeCrawlRunId
+    const activeCrawls = sites.flatMap((site) => {
+      const crawl = site.latest_crawl
+      return crawl && !terminalStatuses.includes(crawl.status)
+        ? [{ siteId: site.site_id, crawlRunId: crawl.crawl_run_id }]
+        : []
+    })
+    if (activeCrawls.length === 0) return
 
     let cancelled = false
-    let timer: number
+    let polling = false
+    const timer = window.setInterval(async () => {
+      if (polling) return
+      polling = true
+      const results = await Promise.allSettled(
+        activeCrawls.map(({ siteId, crawlRunId }) => getCrawlStatus(siteId, crawlRunId)),
+      )
+      polling = false
+      if (cancelled) return
 
-    async function poll() {
-      try {
-        const latest = await getCrawlStatus(
-          siteId,
-          crawlRunId,
-        )
-        if (cancelled) return
-        setActiveCrawl((current) => current ? { ...current, status: latest.status, details: latest } : null)
-        setPollError('')
-        if (!terminalStatuses.includes(latest.status)) {
-          timer = window.setTimeout(poll, 4000)
+      const refreshed = new Map<string, CrawlStatusResponse>()
+      let firstError = ''
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          refreshed.set(activeCrawls[index].siteId, result.value)
+        } else if (!firstError) {
+          firstError = result.reason instanceof Error
+            ? result.reason.message
+            : 'Unable to refresh the crawl status.'
         }
-      } catch (error) {
-        if (cancelled) return
-        setPollError(error instanceof Error ? error.message : 'Unable to refresh the crawl status.')
-        timer = window.setTimeout(poll, 4000)
+      })
+      if (refreshed.size > 0) {
+        setSites((current) => current.map((site) => ({
+          ...site,
+          latest_crawl: refreshed.get(site.site_id) ?? site.latest_crawl,
+        })))
       }
-    }
+      setPollError(firstError)
+    }, 4000)
 
-    timer = window.setTimeout(poll, 4000)
     return () => {
       cancelled = true
-      window.clearTimeout(timer)
+      window.clearInterval(timer)
     }
-  }, [activeCrawlRunId, activeSiteId, crawlStatus])
+  }, [sites])
 
   async function handleSignOut() {
     setSigningOut(true)
@@ -139,8 +142,7 @@ export function HomePage({ onSignOut, user }: HomePageProps) {
     setCreateError('')
     setCreating(true)
     try {
-      const crawl = await createCrawl(url.trim())
-      setActiveCrawl(crawl)
+      await createCrawl(url.trim())
       try {
         setSites(await listSites())
         setSitesError('')
@@ -189,28 +191,28 @@ export function HomePage({ onSignOut, user }: HomePageProps) {
         ) : (
           <div className="crawl-list" aria-live="polite">
             {sites.map((site) => {
-              const isActive = activeCrawl?.site_id === site.site_id
-                && activeCrawl.crawl_run_id === site.last_crawl_run_id
+              const crawl = site.latest_crawl
+              const crawlStatus = crawl?.status
               return (
                 <div className="site-entry" key={site.site_id}>
                   <article className="crawl-item">
                     <div className="crawl-icon"><Globe2 size={20} /></div>
                     <div className="crawl-primary">
                       <strong>{site.root_url}</strong>
-                      <span>{site.last_crawl_run_id}</span>
+                      <span>{crawl?.crawl_run_id ?? site.last_crawl_run_id}</span>
                     </div>
-                    {isActive && crawlStatus && (
+                    {crawlStatus && (
                       <div className={`status-badge status-${crawlStatus.toLowerCase()}`}>
-                        {crawlStatus === 'CRAWLED' || crawlStatus === 'COMPLETED' ? <CheckCircle2 size={15} /> : crawlStatus === 'FAILED' ? <AlertCircle size={15} /> : crawlStatus === 'WORKING' ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
+                        {crawlStatus === 'GENERATION_QUEUED' || crawlStatus === 'COMPLETED' ? <CheckCircle2 size={15} /> : crawlStatus === 'FAILED' ? <AlertCircle size={15} /> : crawlStatus === 'WORKING' || crawlStatus === 'CRAWLED' ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
                         {statusLabel(crawlStatus)}
                       </div>
                     )}
                   </article>
-                  {isActive && activeCrawl.details && (
+                  {crawl && (
                     <div className="crawl-counts">
-                      <span>{activeCrawl.details.discovered_page_count} discovered</span>
-                      <span>{activeCrawl.details.completed_page_count} completed</span>
-                      <span>{activeCrawl.details.failed_page_count} failed</span>
+                      <span>{crawl.discovered_page_count} discovered</span>
+                      <span>{crawl.completed_page_count} completed</span>
+                      <span>{crawl.failed_page_count} failed</span>
                     </div>
                   )}
                 </div>

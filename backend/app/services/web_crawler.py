@@ -19,7 +19,12 @@ from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 from app.tables.sites import SitesTable
 
-HTML_CONTENT_TYPES = {"application/xhtml+xml", "text/html"}
+SUPPORTED_CONTENT_TYPES = {
+    "application/xhtml+xml",
+    "text/html",
+    "text/markdown",
+    "text/x-markdown",
+}
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
 
@@ -40,7 +45,7 @@ class RobotsDeniedError(WebCrawlerError):
 
 
 class UnsupportedContentTypeError(WebCrawlerError):
-    """Raised when a response is not HTML."""
+    """Raised when a response is not a supported crawlable document."""
 
 
 class ResponseTooLargeError(WebCrawlerError):
@@ -161,9 +166,7 @@ class WebCrawlerService:
             final_url = str((existing_page or {}).get("final_url", request.url))
             html_unchanged = bool((existing_page or {}).get("html_unchanged", False))
             if not raw_html_s3_key:
-                raw_html_s3_key, final_url, html_unchanged = self._fetch_and_store(
-                    request
-                )
+                raw_html_s3_key, final_url, html_unchanged = self._fetch_and_store(request)
 
             self._publish_parse_message(
                 request,
@@ -225,9 +228,12 @@ class WebCrawlerService:
         if html_unchanged:
             raw_html_s3_key = str(previous_page["raw_html_s3_key"])
         else:
+            extension = (
+                ".md" if page.content_type in {"text/markdown", "text/x-markdown"} else ".html"
+            )
             raw_html_s3_key = (
                 f"raw/{request.site_id}/{request.crawl_run_id}/"
-                f"{request.canonical_url_hash}.html"
+                f"{request.canonical_url_hash}{extension}"
             )
             self.s3.put_bytes(
                 key=raw_html_s3_key,
@@ -312,7 +318,7 @@ def fetch_html_page(
     request = Request(
         url,
         headers={
-            "Accept": "text/html,application/xhtml+xml",
+            "Accept": "text/html,application/xhtml+xml,text/markdown;q=0.9",
             "Accept-Encoding": "identity",
             "User-Agent": user_agent,
         },
@@ -324,9 +330,9 @@ def fetch_html_page(
             final_url = response.geturl()
             validate_public_url(final_url)
             content_type = response.headers.get_content_type().lower()
-            if content_type not in HTML_CONTENT_TYPES:
+            if content_type not in SUPPORTED_CONTENT_TYPES:
                 raise UnsupportedContentTypeError(
-                    f"Expected HTML from '{url}', received '{content_type}'"
+                    f"Expected HTML or Markdown from '{url}', received '{content_type}'"
                 )
             content = _read_limited(response, max_response_bytes)
             return FetchedPage(
@@ -397,9 +403,7 @@ def _validate_url_shape(url: str) -> Any:
 def _read_limited(response: Any, max_response_bytes: int) -> bytes:
     content = response.read(max_response_bytes + 1)
     if len(content) > max_response_bytes:
-        raise ResponseTooLargeError(
-            f"Response exceeds the {max_response_bytes}-byte crawl limit"
-        )
+        raise ResponseTooLargeError(f"Response exceeds the {max_response_bytes}-byte crawl limit")
     return content
 
 

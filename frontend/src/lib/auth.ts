@@ -7,6 +7,8 @@ import {
   signIn,
   signOut,
 } from 'aws-amplify/auth'
+import { cognitoUserPoolsTokenProvider } from 'aws-amplify/auth/cognito'
+import { defaultStorage } from 'aws-amplify/utils'
 
 const userPoolId = import.meta.env.VITE_COGNITO_USER_POOL_ID
 const userPoolClientId = import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID
@@ -30,12 +32,15 @@ export function configureAuth(): boolean {
       },
     },
   })
+  cognitoUserPoolsTokenProvider.setKeyValueStorage(defaultStorage)
 
   return true
 }
 
 export async function currentUser(): Promise<AuthenticatedUser | null> {
   try {
+    const session = await fetchAuthSession()
+    if (!session.tokens?.accessToken) return null
     const user = await getCurrentUser()
     return {
       id: user.userId,
@@ -68,8 +73,8 @@ export async function endSession(): Promise<void> {
   await signOut()
 }
 
-export async function getAccessToken(): Promise<string> {
-  const session = await fetchAuthSession()
+export async function getAccessToken(forceRefresh = false): Promise<string> {
+  const session = await fetchAuthSession({ forceRefresh })
   const accessToken = session.tokens?.accessToken
   if (!accessToken) {
     throw new Error('Your session has expired. Sign in again.')

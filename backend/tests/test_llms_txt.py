@@ -126,7 +126,8 @@ def test_create_llms_txt_persists_site_mapping_and_crawl() -> None:
         "operation": "add",
         "user_id": "user-123",
         "site_id": body["site_id"],
-        "created_at": user_sites.calls[0]["created_at"],
+        "crawl_run_id": body["crawl_run_id"],
+        "timestamp": user_sites.calls[0]["timestamp"],
     }
     assert crawl_runs.calls[0]["site_id"] == body["site_id"]
     assert crawl_runs.calls[0]["crawl_run_id"] == body["crawl_run_id"]
@@ -229,9 +230,7 @@ def test_create_llms_txt_marks_run_failed_when_queueing_fails() -> None:
         response = client.post("/llms-txt", json={"url": "https://example.com"})
 
     assert response.status_code == 502
-    assert response.json() == {
-        "detail": "The crawl request was saved but could not be queued."
-    }
+    assert response.json() == {"detail": "The crawl request was saved but could not be queued."}
     assert crawl_runs.calls[-1]["operation"] == "update_status"
     assert crawl_runs.calls[-1]["crawl_status"] == "FAILED"
 
@@ -279,7 +278,11 @@ def test_get_crawl_status_hides_crawls_not_owned_by_user() -> None:
 def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
     user_sites = FakeTable(
         items=[
-            {"user_id": "user-123", "site_id": "site-1"},
+            {
+                "user_id": "user-123",
+                "site_id": "site-1",
+                "last_crawl_run_id": "crawl-current-1",
+            },
             {"user_id": "user-123", "site_id": "site-2"},
         ]
     )
@@ -303,7 +306,31 @@ def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
             },
         }
     )
-    app = _test_app(sites, user_sites, FakeTable(), FakeTable())
+    crawl_runs = FakeTable(
+        items_by_site_id={
+            "site-1": {
+                "site_id": "site-1",
+                "crawl_run_id": "crawl-current-1",
+                "status": "WORKING",
+                "pending_page_count": 2,
+                "discovered_page_count": 3,
+                "completed_page_count": 1,
+                "failed_page_count": 0,
+                "created_at": "2026-09-27T13:00:00+00:00",
+            },
+            "site-2": {
+                "site_id": "site-2",
+                "crawl_run_id": "crawl-2",
+                "status": "COMPLETED",
+                "pending_page_count": 0,
+                "discovered_page_count": 1,
+                "completed_page_count": 1,
+                "failed_page_count": 0,
+                "created_at": "2026-09-27T12:00:00+00:00",
+            },
+        }
+    )
+    app = _test_app(sites, user_sites, crawl_runs, FakeTable())
 
     with TestClient(app) as client:
         response = client.get("/llms-txt/sites")
@@ -311,6 +338,9 @@ def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
     assert response.status_code == 200
     assert [site["site_id"] for site in response.json()] == ["site-1", "site-2"]
     assert response.json()[0]["modified_at"] == "2026-09-27T13:00:00+00:00"
+    assert response.json()[0]["latest_crawl"]["crawl_run_id"] == "crawl-current-1"
+    assert response.json()[0]["latest_crawl"]["status"] == "WORKING"
+    assert response.json()[1]["latest_crawl"]["status"] == "COMPLETED"
     assert user_sites.calls[0] == {
         "operation": "list_for_user",
         "user_id": "user-123",

@@ -98,9 +98,10 @@ def _service(
     robots_allowed: bool = True,
     crawl_runs: FakeCrawlRunsTable | None = None,
     sites: FakeSitesTable | None = None,
+    fetched_page: FetchedPage | None = None,
 ) -> WebCrawlerService:
     def fetch_page(*_: Any) -> FetchedPage:
-        return FetchedPage(
+        return fetched_page or FetchedPage(
             content=b"<html><title>Example</title></html>",
             content_type="text/html",
             final_url="https://example.com/",
@@ -152,9 +153,7 @@ def test_crawler_stores_html_and_queues_parsing() -> None:
     assert queued["action"] == "parse_page"
     assert queued["payload"]["raw_html_s3_key"] == key
     assert queued["payload"]["unchanged"] is False
-    assert crawl_pages.calls[1][1]["raw_html_hash"] == sha256(
-        s3.objects[key]
-    ).hexdigest()
+    assert crawl_pages.calls[1][1]["raw_html_hash"] == sha256(s3.objects[key]).hexdigest()
     assert crawl_pages.calls[1][1]["html_unchanged"] is False
     assert sites.calls[0]["crawl_run_id"] == "crawl-1"
     assert "modified_at" in sites.calls[0]
@@ -184,6 +183,28 @@ def test_crawler_reuses_previous_html_when_content_is_unchanged() -> None:
     assert queued["payload"]["raw_html_s3_key"] == previous_key
     assert queued["payload"]["unchanged"] is True
     assert sites.calls == []
+
+
+def test_crawler_accepts_markdown_and_stores_it_with_md_extension() -> None:
+    crawl_pages = FakeCrawlPagesTable(existing={"status": "PENDING"})
+    s3 = FakeS3Client()
+    sqs = FakeSQSClient()
+
+    _service(
+        crawl_pages,
+        s3,
+        sqs,
+        fetched_page=FetchedPage(
+            content=b"# Example\n\n[Guide](/guide)",
+            content_type="text/markdown",
+            final_url="https://example.com/",
+            http_status=200,
+        ),
+    ).process_message(_message())
+
+    key = next(iter(s3.objects))
+    assert key.endswith(".md")
+    assert crawl_pages.calls[1][1]["content_type"] == "text/markdown"
 
 
 def test_crawler_reuses_stored_html_when_queue_delivery_is_retried() -> None:
@@ -257,6 +278,4 @@ def test_crawler_rejects_a_mismatched_url_hash() -> None:
     message["payload"]["canonical_url_hash"] = "0" * 64
 
     with pytest.raises(CrawlMessageError):
-        _service(FakeCrawlPagesTable(), FakeS3Client(), FakeSQSClient()).process_message(
-            message
-        )
+        _service(FakeCrawlPagesTable(), FakeS3Client(), FakeSQSClient()).process_message(message)

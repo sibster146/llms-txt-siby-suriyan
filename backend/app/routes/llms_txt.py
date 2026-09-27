@@ -56,14 +56,21 @@ def list_user_sites(
     user_id: Annotated[str, Depends(get_current_user_id)],
     sites: Annotated[SitesTable, Depends(get_sites_table)],
     user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
+    crawl_runs: Annotated[CrawlRunsTable, Depends(get_crawl_runs_table)],
 ) -> list[SiteSummaryResponse]:
     try:
         mappings = user_sites.list_for_user(user_id)
-        site_records = [
-            site
-            for mapping in mappings
-            if (site := sites.get(str(mapping["site_id"]))) is not None
-        ]
+        site_records: list[dict[str, object]] = []
+        for mapping in mappings:
+            site = sites.get(str(mapping["site_id"]))
+            if site is None:
+                continue
+            crawl_run_id = str(mapping.get("last_crawl_run_id") or site["last_crawl_run_id"])
+            crawl_run = crawl_runs.get(
+                site_id=str(site["site_id"]),
+                crawl_run_id=crawl_run_id,
+            )
+            site_records.append({**site, "latest_crawl": crawl_run})
     except (DynamoDBClientError, KeyError) as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -103,7 +110,8 @@ def create_llms_txt(
         user_sites.add(
             user_id=user_id,
             site_id=site_id,
-            created_at=created_at,
+            crawl_run_id=crawl_run_id,
+            timestamp=created_at,
         )
         crawl_runs.create(
             site_id=site_id,

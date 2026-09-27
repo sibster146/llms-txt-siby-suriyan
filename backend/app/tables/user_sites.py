@@ -11,11 +11,25 @@ class UserSitesTable:
     def __init__(self, dynamodb: DynamoDBClient) -> None:
         self.dynamodb = dynamodb
 
-    def add(self, *, user_id: str, site_id: str, created_at: str) -> None:
+    def add(
+        self,
+        *,
+        user_id: str,
+        site_id: str,
+        crawl_run_id: str,
+        timestamp: str,
+    ) -> None:
         self.dynamodb.update_item(
             key={"user_id": user_id, "site_id": site_id},
-            update_expression="SET created_at = if_not_exists(created_at, :created_at)",
-            expression_attribute_values={":created_at": created_at},
+            update_expression=(
+                "SET created_at = if_not_exists(created_at, :created_at), "
+                "last_crawl_run_id = :crawl_run_id, updated_at = :updated_at"
+            ),
+            expression_attribute_values={
+                ":created_at": timestamp,
+                ":crawl_run_id": crawl_run_id,
+                ":updated_at": timestamp,
+            },
         )
 
     def get(self, *, user_id: str, site_id: str) -> dict[str, Any] | None:

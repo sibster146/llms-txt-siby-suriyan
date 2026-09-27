@@ -15,9 +15,7 @@ from app.services.html_parser import (
 
 class FakeCrawlPagesTable:
     def __init__(self, root: dict[str, Any]) -> None:
-        self.pages = {
-            (str(root["crawl_run_id"]), str(root["canonical_url_hash"])): root
-        }
+        self.pages = {(str(root["crawl_run_id"]), str(root["canonical_url_hash"])): root}
         self.failures: list[dict[str, Any]] = []
 
     def get(self, *, crawl_run_id: str, canonical_url_hash: str) -> dict[str, Any] | None:
@@ -126,13 +124,12 @@ def _service(
     *,
     unchanged: bool = False,
     existing_parsed: bool = False,
+    content_type: str = "text/html",
 ) -> tuple[HtmlParserService, FakeCrawlPagesTable, FakeS3Client, FakeQueue, FakeQueue]:
     message = _message(unchanged=unchanged)
     payload = message["payload"]
     raw_hash = sha256(raw_html).hexdigest()
-    parsed_key = (
-        f"parsed/v1/site-1/{payload['canonical_url_hash']}/{raw_hash}.json"
-    )
+    parsed_key = f"parsed/v1/site-1/{payload['canonical_url_hash']}/{raw_hash}.json"
     objects = {payload["raw_html_s3_key"]: raw_html}
     if existing_parsed:
         objects[parsed_key] = b'{"existing":true}'
@@ -143,6 +140,7 @@ def _service(
             "status": "PARSE_PENDING",
             "raw_html_s3_key": payload["raw_html_s3_key"],
             "raw_html_hash": raw_hash,
+            "content_type": content_type,
         }
     )
     s3 = FakeS3Client(objects)
@@ -205,6 +203,24 @@ def test_unchanged_page_reuses_parsed_content_but_rediscovers_links() -> None:
     assert crawl_queue.messages[0]["payload"]["url"] == "https://example.com/child"
 
 
+def test_parser_extracts_markdown_content_and_same_site_links() -> None:
+    raw_markdown = b"# Ramp\n\nBusiness finance platform.\n\n[Guide](/guide)\n\n[External](https://outside.example/)"
+    service, _, s3, crawl_queue, _ = _service(
+        raw_markdown,
+        content_type="text/markdown",
+    )
+
+    service.process_message(_message())
+
+    parsed = json.loads(s3.objects[s3.writes[0]])
+    assert parsed["title"] == "Ramp"
+    assert parsed["description"] == "Business finance platform."
+    assert parsed["source_content_type"] == "text/markdown"
+    assert [message["payload"]["url"] for message in crawl_queue.messages] == [
+        "https://example.com/guide"
+    ]
+
+
 def test_parser_queues_generation_when_every_page_is_terminal() -> None:
     raw_html = b"<html><body><main>Standalone page content.</main></body></html>"
     service, pages, _, _, llm_queue = _service(raw_html)
@@ -243,14 +259,17 @@ def test_link_discovery_stops_at_the_configured_depth() -> None:
         "https://example.com/",
     )
 
-    assert extract_child_urls(
-        document,
-        request_url="https://example.com/",
-        final_url="https://example.com/",
-        depth=3,
-        max_depth=3,
-        max_links=10,
-    ) == []
+    assert (
+        extract_child_urls(
+            document,
+            request_url="https://example.com/",
+            final_url="https://example.com/",
+            depth=3,
+            max_depth=3,
+            max_links=10,
+        )
+        == []
+    )
 
 
 def test_parser_rejects_a_mismatched_url_hash() -> None:

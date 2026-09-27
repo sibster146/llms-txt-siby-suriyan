@@ -40,6 +40,7 @@ export interface SiteSummary {
   created_at: string
   updated_at: string
   modified_at: string | null
+  latest_crawl: CrawlStatusResponse | null
 }
 
 async function errorMessage(response: Response, fallback: string): Promise<string> {
@@ -47,8 +48,15 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
   return typeof body.detail === 'string' ? body.detail : fallback
 }
 
-async function authorizationHeaders(): Promise<Record<string, string>> {
-  return { Authorization: `Bearer ${await getAccessToken()}` }
+async function authenticatedFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  async function send(forceRefresh: boolean): Promise<Response> {
+    const headers = new Headers(init.headers)
+    headers.set('Authorization', `Bearer ${await getAccessToken(forceRefresh)}`)
+    return fetch(input, { ...init, headers })
+  }
+
+  const response = await send(false)
+  return response.status === 401 ? send(true) : response
 }
 
 export async function createAccount(email: string, password: string): Promise<void> {
@@ -64,11 +72,10 @@ export async function createAccount(email: string, password: string): Promise<vo
 }
 
 export async function createCrawl(url: string): Promise<CreateCrawlResponse> {
-  const response = await fetch(`${apiUrl}/llms-txt`, {
+  const response = await authenticatedFetch(`${apiUrl}/llms-txt`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(await authorizationHeaders()),
     },
     body: JSON.stringify({ url }),
   })
@@ -80,9 +87,7 @@ export async function createCrawl(url: string): Promise<CreateCrawlResponse> {
 }
 
 export async function listSites(): Promise<SiteSummary[]> {
-  const response = await fetch(`${apiUrl}/llms-txt/sites`, {
-    headers: await authorizationHeaders(),
-  })
+  const response = await authenticatedFetch(`${apiUrl}/llms-txt/sites`)
 
   if (!response.ok) {
     throw new Error(await errorMessage(response, 'Unable to load your websites.'))
@@ -94,9 +99,8 @@ export async function getCrawlStatus(
   siteId: string,
   crawlRunId: string,
 ): Promise<CrawlStatusResponse> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     `${apiUrl}/llms-txt/${encodeURIComponent(siteId)}/crawls/${encodeURIComponent(crawlRunId)}`,
-    { headers: await authorizationHeaders() },
   )
 
   if (!response.ok) {

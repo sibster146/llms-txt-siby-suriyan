@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import trafilatura
 from lxml import html
+from markdown_it import MarkdownIt
 
 from app.clients.s3 import S3Client
 from app.clients.sqs import SQSClient, SQSClientError
@@ -64,6 +65,8 @@ ACTIVE_PAGE_STATUSES = {
     "CRAWLED",
     "PARSE_PENDING",
 }
+HTML_CONTENT_TYPES = {"application/xhtml+xml", "text/html"}
+MARKDOWN_CONTENT_TYPES = {"text/markdown", "text/x-markdown"}
 
 
 class HtmlParserError(Exception):
@@ -157,28 +160,53 @@ class HtmlParserService:
 
         try:
             raw_html = self.s3.get_bytes(request.raw_html_s3_key)
-            document = _parse_document(raw_html, request.final_url)
-            child_urls = extract_child_urls(
-                document,
-                request_url=request.url,
-                final_url=request.final_url,
-                depth=request.depth,
-                max_depth=self.max_depth,
-                max_links=self.max_links_per_page,
+            content_type = (
+                str(page_record.get("content_type", "text/html")).split(";", 1)[0].lower()
             )
+            if content_type in HTML_CONTENT_TYPES:
+                document = _parse_document(raw_html, request.final_url)
+                child_urls = extract_child_urls(
+                    document,
+                    request_url=request.url,
+                    final_url=request.final_url,
+                    depth=request.depth,
+                    max_depth=self.max_depth,
+                    max_links=self.max_links_per_page,
+                )
+            elif content_type in MARKDOWN_CONTENT_TYPES:
+                document = None
+                child_urls = extract_markdown_child_urls(
+                    raw_html,
+                    request_url=request.url,
+                    final_url=request.final_url,
+                    depth=request.depth,
+                    max_depth=self.max_depth,
+                    max_links=self.max_links_per_page,
+                )
+            else:
+                raise HtmlParserError(f"Unsupported parser content type '{content_type}'")
             parsed_key = self._parsed_content_key(
                 request.site_id,
                 request.canonical_url_hash,
                 raw_html_hash,
             )
             if not request.unchanged or not self.s3.object_exists(parsed_key):
-                parsed_content = extract_page_content(
-                    raw_html,
-                    document,
-                    request.final_url,
-                    raw_html_hash,
-                    self.parser_version,
-                )
+                if content_type in MARKDOWN_CONTENT_TYPES:
+                    parsed_content = extract_markdown_content(
+                        raw_html,
+                        request.final_url,
+                        raw_html_hash,
+                        self.parser_version,
+                    )
+                else:
+                    parsed_content = extract_page_content(
+                        raw_html,
+                        document,
+                        request.final_url,
+                        raw_html_hash,
+                        self.parser_version,
+                    )
+                parsed_content["source_content_type"] = content_type
                 self.s3.put_text(
                     key=parsed_key,
                     content=json.dumps(parsed_content, ensure_ascii=True, separators=(",", ":")),
@@ -222,10 +250,7 @@ class HtmlParserService:
         canonical_url_hash: str,
         raw_html_hash: str,
     ) -> str:
-        return (
-            f"parsed/{self.parser_version}/{site_id}/"
-            f"{canonical_url_hash}/{raw_html_hash}.json"
-        )
+        return f"parsed/{self.parser_version}/{site_id}/{canonical_url_hash}/{raw_html_hash}.json"
 
     def _queue_child_pages(
         self,
@@ -333,9 +358,7 @@ def extract_child_urls(
         rel = {part.lower() for part in str(anchor.get("rel", "")).split()}
         if "nofollow" in rel:
             continue
-        canonical_url = canonicalize_discovered_url(
-            urljoin(base_url, str(anchor.get("href", "")))
-        )
+        canonical_url = canonicalize_discovered_url(urljoin(base_url, str(anchor.get("href", ""))))
         if canonical_url is None:
             continue
         if (urlsplit(canonical_url).hostname or "").lower() not in allowed_hosts:
@@ -343,6 +366,41 @@ def extract_child_urls(
         child_urls.add(canonical_url)
         if len(child_urls) >= max_links:
             break
+    return sorted(child_urls)
+
+
+def extract_markdown_child_urls(
+    raw_markdown: bytes,
+    *,
+    request_url: str,
+    final_url: str,
+    depth: int,
+    max_depth: int,
+    max_links: int,
+) -> list[str]:
+    if depth >= max_depth:
+        return []
+
+    allowed_hosts = {
+        host
+        for value in (request_url, final_url)
+        if (host := (urlsplit(value).hostname or "").lower())
+    }
+    markdown_text = raw_markdown.decode("utf-8", errors="replace")
+    child_urls: set[str] = set()
+    for token in MarkdownIt("commonmark").parse(markdown_text):
+        for child in token.children or []:
+            if child.type != "link_open":
+                continue
+            href = child.attrGet("href")
+            canonical_url = canonicalize_discovered_url(urljoin(final_url, href or ""))
+            if canonical_url is None:
+                continue
+            if (urlsplit(canonical_url).hostname or "").lower() not in allowed_hosts:
+                continue
+            child_urls.add(canonical_url)
+            if len(child_urls) >= max_links:
+                return sorted(child_urls)
     return sorted(child_urls)
 
 
@@ -377,15 +435,18 @@ def extract_page_content(
     parser_version: str,
 ) -> dict[str, Any]:
     html_text = raw_html.decode("utf-8", errors="replace")
-    main_content = trafilatura.extract(
-        html_text,
-        url=final_url,
-        output_format="markdown",
-        include_formatting=True,
-        include_links=True,
-        include_images=False,
-        favor_precision=True,
-    ) or ""
+    main_content = (
+        trafilatura.extract(
+            html_text,
+            url=final_url,
+            output_format="markdown",
+            include_formatting=True,
+            include_links=True,
+            include_images=False,
+            favor_precision=True,
+        )
+        or ""
+    )
     metadata = trafilatura.extract_metadata(html_text, default_url=final_url)
     title = _metadata_value(metadata, "title") or _first_text(document, "//title")
     description = _metadata_value(metadata, "description") or _meta_description(document)
@@ -402,6 +463,43 @@ def extract_page_content(
         "language": language,
         "headings": headings,
         "main_content": main_content,
+        "raw_html_hash": raw_html_hash,
+        "parser_version": parser_version,
+        "parsed_at": _utc_now(),
+    }
+
+
+def extract_markdown_content(
+    raw_markdown: bytes,
+    final_url: str,
+    raw_html_hash: str,
+    parser_version: str,
+) -> dict[str, Any]:
+    markdown_text = raw_markdown.decode("utf-8", errors="replace").strip()
+    tokens = MarkdownIt("commonmark").parse(markdown_text)
+    headings: list[dict[str, str]] = []
+    title: str | None = None
+    description: str | None = None
+
+    for index, token in enumerate(tokens):
+        if token.type == "heading_open" and index + 1 < len(tokens):
+            heading_text = _clean_text(tokens[index + 1].content)
+            if heading_text:
+                headings.append({"level": token.tag.lower(), "text": heading_text})
+                if token.tag.lower() == "h1" and title is None:
+                    title = heading_text
+        elif token.type == "paragraph_open" and index + 1 < len(tokens) and description is None:
+            paragraph_text = _clean_text(tokens[index + 1].content)
+            if paragraph_text:
+                description = paragraph_text
+
+    return {
+        "url": final_url,
+        "title": title,
+        "description": description,
+        "language": None,
+        "headings": headings,
+        "main_content": markdown_text,
         "raw_html_hash": raw_html_hash,
         "parser_version": parser_version,
         "parsed_at": _utc_now(),

@@ -42,9 +42,7 @@ def test_sites_table_upserts_the_current_crawl() -> None:
 
     assert dynamodb.updates[0]["key"] == {"site_id": "site-1"}
     assert dynamodb.updates[0]["expression_attribute_values"][":crawl_run_id"] == "crawl-1"
-    assert "if_not_exists(last_crawl_run_id" in dynamodb.updates[0][
-        "update_expression"
-    ]
+    assert "if_not_exists(last_crawl_run_id" in dynamodb.updates[0]["update_expression"]
 
 
 def test_sites_table_marks_the_latest_changed_crawl() -> None:
@@ -82,10 +80,12 @@ def test_user_sites_table_adds_a_mapping() -> None:
     UserSitesTable(dynamodb).add(
         user_id="user-1",
         site_id="site-1",
-        created_at="2026-09-27T00:00:00+00:00",
+        crawl_run_id="crawl-1",
+        timestamp="2026-09-27T00:00:00+00:00",
     )
 
     assert dynamodb.updates[0]["key"] == {"user_id": "user-1", "site_id": "site-1"}
+    assert dynamodb.updates[0]["expression_attribute_values"][":crawl_run_id"] == ("crawl-1")
 
 
 def test_crawl_runs_table_creates_initial_counts() -> None:
@@ -162,9 +162,7 @@ def test_crawl_runs_table_claims_generation_atomically() -> None:
     )
 
     assert claimed
-    assert dynamodb.updates[0]["expression_attribute_values"][":status"] == (
-        "GENERATION_QUEUED"
-    )
+    assert dynamodb.updates[0]["expression_attribute_values"][":status"] == ("GENERATION_QUEUED")
     assert dynamodb.updates[0]["condition_expression"] is not None
 
 
