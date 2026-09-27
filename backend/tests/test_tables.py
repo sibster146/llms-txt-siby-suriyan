@@ -152,6 +152,20 @@ def test_crawl_runs_table_records_parser_progress() -> None:
     assert values[":completed"] == 1
 
 
+def test_crawl_runs_table_records_terminal_crawl_failure() -> None:
+    dynamodb = RecordingDynamoDBClient()
+
+    CrawlRunsTable(dynamodb).record_failed_page(
+        site_id="site-1",
+        crawl_run_id="crawl-1",
+        updated_at="2026-09-27T02:00:00+00:00",
+    )
+
+    values = dynamodb.updates[0]["expression_attribute_values"]
+    assert values[":pending"] == -1
+    assert values[":failed"] == 1
+
+
 def test_crawl_runs_table_claims_generation_atomically() -> None:
     dynamodb = RecordingDynamoDBClient()
 

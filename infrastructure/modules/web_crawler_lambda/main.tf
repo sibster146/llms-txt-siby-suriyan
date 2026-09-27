@@ -39,9 +39,9 @@ data "aws_iam_policy_document" "permissions" {
   }
 
   statement {
-    sid       = "PublishParseMessages"
+    sid       = "PublishDownstreamMessages"
     actions   = ["sqs:SendMessage"]
-    resources = [var.parse_queue_arn]
+    resources = [var.parse_queue_arn, var.llm_txt_queue_arn]
   }
 
   statement {
@@ -114,6 +114,7 @@ resource "aws_lambda_function" "this" {
       CRAWL_RUNS_TABLE                = var.crawl_runs_table_name
       SITES_TABLE                     = var.sites_table_name
       PARSE_QUEUE_URL                 = var.parse_queue_url
+      LLM_TXT_QUEUE_URL               = var.llm_txt_queue_url
     }
   }
 

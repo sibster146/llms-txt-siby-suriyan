@@ -19,8 +19,10 @@ module "dynamodb" {
 module "sqs" {
   source = "../modules/sqs"
 
-  environment  = "dev"
-  project_name = var.project_name
+  environment                      = "dev"
+  project_name                     = var.project_name
+  crawl_visibility_timeout_seconds = 30
+  crawl_max_receive_count          = 4
 }
 
 module "s3" {
@@ -56,6 +58,8 @@ module "web_crawler_lambda" {
   crawl_queue_arn         = module.sqs.queue_arns.crawl
   parse_queue_arn         = module.sqs.queue_arns.parse
   parse_queue_url         = module.sqs.queue_urls.parse
+  llm_txt_queue_arn       = module.sqs.queue_arns.llm_txt
+  llm_txt_queue_url       = module.sqs.queue_urls.llm_txt
   crawl_pages_table_name  = module.dynamodb.table_names.crawl_pages
   crawl_pages_table_arn   = module.dynamodb.table_arns.crawl_pages
   crawl_runs_table_name   = module.dynamodb.table_names.crawl_runs
@@ -64,7 +68,8 @@ module "web_crawler_lambda" {
   sites_table_arn         = module.dynamodb.table_arns.sites
   application_bucket_name = module.s3.bucket_name
   application_bucket_arn  = module.s3.bucket_arn
-  max_attempts            = 5
+  max_attempts            = 4
+  timeout_seconds         = 25
   request_timeout_seconds = 10
   max_response_bytes      = 5242880
   user_agent              = "llms-txt-crawler/1.0 (+https://github.com/tryBaskt/llms-txt-siby-suriyan)"

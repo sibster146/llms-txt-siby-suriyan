@@ -34,6 +34,16 @@ variable "parse_queue_url" {
   description = "URL of the parser queue."
 }
 
+variable "llm_txt_queue_arn" {
+  type        = string
+  description = "ARN of the llms.txt generator queue."
+}
+
+variable "llm_txt_queue_url" {
+  type        = string
+  description = "URL of the llms.txt generator queue."
+}
+
 variable "crawl_pages_table_name" {
   type        = string
   description = "DynamoDB crawl-pages table name."
@@ -95,7 +105,7 @@ variable "max_response_bytes" {
 variable "max_attempts" {
   type        = number
   description = "Number of deliveries before SQS moves a message to the dead-letter queue."
-  default     = 5
+  default     = 4
 }
 
 variable "memory_size" {

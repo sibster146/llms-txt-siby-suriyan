@@ -47,6 +47,7 @@ def _web_crawler_service() -> WebCrawlerService:
         ),
         sqs_client=session.client("sqs", region_name=region),
         parse_queue_url=_required_env("PARSE_QUEUE_URL"),
+        llm_txt_queue_url=_required_env("LLM_TXT_QUEUE_URL"),
         user_agent=_required_env("CRAWLER_USER_AGENT"),
         request_timeout_seconds=float(_required_env("CRAWLER_REQUEST_TIMEOUT_SECONDS")),
         max_response_bytes=int(_required_env("CRAWLER_MAX_RESPONSE_BYTES")),

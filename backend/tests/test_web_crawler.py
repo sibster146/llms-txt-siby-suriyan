@@ -1,14 +1,18 @@
 import json
 from hashlib import sha256
 from typing import Any
+from urllib.error import HTTPError
 
 import pytest
 
 from app.services.web_crawler import (
     CrawlMessageError,
     FetchedPage,
+    PageNotFoundError,
+    ResponseTooLargeError,
     RobotsDeniedError,
     WebCrawlerService,
+    fetch_html_page,
 )
 
 
@@ -37,19 +41,44 @@ class FakeCrawlPagesTable:
     def mark_parse_pending(self, **kwargs: Any) -> None:
         self.calls.append(("mark_parse_pending", kwargs))
 
-    def record_failure(self, **kwargs: Any) -> None:
+    def record_failure(self, **kwargs: Any) -> bool:
         self.calls.append(("record_failure", kwargs))
+        if kwargs["terminal"] and self.existing is not None:
+            self.existing["status"] = "FAILED"
+        return kwargs["terminal"]
+
+    def list_for_run(self, _: str) -> list[dict[str, Any]]:
+        return [self.existing] if self.existing is not None else []
 
 
 class FakeCrawlRunsTable:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.generation_claimed = False
 
     def update_status(self, **kwargs: Any) -> None:
         self.calls.append(kwargs)
 
     def mark_crawled(self, **kwargs: Any) -> None:
         self.calls.append({**kwargs, "crawl_status": "CRAWLED"})
+
+    def record_failed_page(self, **kwargs: Any) -> dict[str, int]:
+        self.calls.append({**kwargs, "operation": "record_failed_page"})
+        return {
+            "pending_page_count": 0,
+            "discovered_page_count": 1,
+            "completed_page_count": 0,
+            "failed_page_count": 1,
+        }
+
+    def claim_generation(self, **_: Any) -> bool:
+        if self.generation_claimed:
+            return False
+        self.generation_claimed = True
+        return True
+
+    def release_generation_claim(self, **_: Any) -> None:
+        self.generation_claimed = False
 
 
 class FakeSitesTable:
@@ -99,8 +128,11 @@ def _service(
     crawl_runs: FakeCrawlRunsTable | None = None,
     sites: FakeSitesTable | None = None,
     fetched_page: FetchedPage | None = None,
+    fetch_error: Exception | None = None,
 ) -> WebCrawlerService:
     def fetch_page(*_: Any) -> FetchedPage:
+        if fetch_error is not None:
+            raise fetch_error
         return fetched_page or FetchedPage(
             content=b"<html><title>Example</title></html>",
             content_type="text/html",
@@ -116,10 +148,11 @@ def _service(
         s3=s3,
         sqs_client=sqs,
         parse_queue_url="https://sqs.example/parse",
+        llm_txt_queue_url="https://sqs.example/llm-txt",
         user_agent="llms-txt-crawler/1.0",
         request_timeout_seconds=10,
         max_response_bytes=1_000_000,
-        max_attempts=5,
+        max_attempts=4,
         fetch_page=fetch_page,
         robots_checker=lambda *_: robots_allowed,
     )
@@ -148,7 +181,7 @@ def test_crawler_stores_html_and_queues_parsing() -> None:
         "mark_crawled",
         "mark_parse_pending",
     ]
-    assert [call["crawl_status"] for call in crawl_runs.calls] == ["WORKING", "CRAWLED"]
+    assert [call["crawl_status"] for call in crawl_runs.calls] == ["WORKING"]
     queued = json.loads(sqs.messages[0]["MessageBody"])
     assert queued["action"] == "parse_page"
     assert queued["payload"]["raw_html_s3_key"] == key
@@ -227,7 +260,7 @@ def test_crawler_reuses_stored_html_when_queue_delivery_is_retried() -> None:
     assert json.loads(sqs.messages[0]["MessageBody"])["payload"]["unchanged"] is True
 
 
-def test_crawler_repairs_run_status_after_parse_was_already_queued() -> None:
+def test_crawler_does_not_requeue_parsing_when_it_was_already_queued() -> None:
     crawl_pages = FakeCrawlPagesTable(existing={"status": "PARSE_PENDING"})
     crawl_runs = FakeCrawlRunsTable()
 
@@ -239,7 +272,17 @@ def test_crawler_repairs_run_status_after_parse_was_already_queued() -> None:
     ).process_message(_message(), attempt=2)
 
     assert crawl_pages.calls == []
-    assert crawl_runs.calls[0]["crawl_status"] == "CRAWLED"
+    assert crawl_runs.calls == []
+
+
+def test_crawler_retries_generation_check_for_an_already_failed_page() -> None:
+    crawl_pages = FakeCrawlPagesTable(existing={"status": "FAILED"})
+    sqs = FakeSQSClient()
+
+    _service(crawl_pages, FakeS3Client(), sqs).process_message(_message(), attempt=2)
+
+    assert crawl_pages.calls == []
+    assert json.loads(sqs.messages[0]["MessageBody"])["action"] == "generate_llms_txt"
 
 
 def test_crawler_records_retryable_robots_failure() -> None:
@@ -268,9 +311,66 @@ def test_crawler_marks_last_attempt_terminal() -> None:
             FakeS3Client(),
             FakeSQSClient(),
             robots_allowed=False,
-        ).process_message(_message(), attempt=5)
+        ).process_message(_message(), attempt=4)
 
     assert crawl_pages.calls[-1][1]["terminal"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        PageNotFoundError("Page not found"),
+        ResponseTooLargeError("Response exceeds limit"),
+    ],
+)
+def test_crawler_does_not_retry_non_retryable_failures(error: Exception) -> None:
+    crawl_pages = FakeCrawlPagesTable(existing={"status": "PENDING"})
+    crawl_runs = FakeCrawlRunsTable()
+    sqs = FakeSQSClient()
+
+    _service(
+        crawl_pages,
+        FakeS3Client(),
+        sqs,
+        crawl_runs=crawl_runs,
+        fetch_error=error,
+    ).process_message(_message())
+
+    failure = crawl_pages.calls[-1]
+    assert failure[0] == "record_failure"
+    assert failure[1]["terminal"]
+    assert any(call.get("operation") == "record_failed_page" for call in crawl_runs.calls)
+    generation_message = json.loads(sqs.messages[-1]["MessageBody"])
+    assert generation_message["action"] == "generate_llms_txt"
+
+
+def test_fetch_treats_http_404_as_non_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    class NotFoundOpener:
+        def open(self, *_: Any, **__: Any) -> Any:
+            raise HTTPError(
+                "https://example.com/missing",
+                404,
+                "Not Found",
+                hdrs=None,
+                fp=None,
+            )
+
+    monkeypatch.setattr(
+        "app.services.web_crawler.validate_public_url",
+        lambda _: None,
+    )
+    monkeypatch.setattr(
+        "app.services.web_crawler.build_opener",
+        lambda *_: NotFoundOpener(),
+    )
+
+    with pytest.raises(PageNotFoundError):
+        fetch_html_page(
+            "https://example.com/missing",
+            "llms-txt-crawler/1.0",
+            10,
+            1_000_000,
+        )
 
 
 def test_crawler_rejects_a_mismatched_url_hash() -> None:

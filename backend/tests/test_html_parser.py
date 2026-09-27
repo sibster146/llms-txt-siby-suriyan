@@ -58,7 +58,13 @@ class FakeCrawlRunsTable:
 
     def record_parsed_page(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
-        return {}
+        new_pages = kwargs["discovered_page_count"]
+        return {
+            "pending_page_count": new_pages,
+            "discovered_page_count": 1 + new_pages,
+            "completed_page_count": 1,
+            "failed_page_count": 0,
+        }
 
     def claim_generation(self, **_: Any) -> bool:
         if self.generation_claimed:

@@ -22,11 +22,11 @@ resource "aws_sqs_queue" "crawl" {
 
   message_retention_seconds  = var.message_retention_seconds
   receive_wait_time_seconds  = var.receive_wait_time_seconds
-  visibility_timeout_seconds = var.visibility_timeout_seconds
+  visibility_timeout_seconds = var.crawl_visibility_timeout_seconds
   sqs_managed_sse_enabled    = true
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.crawl_dlq.arn
-    maxReceiveCount     = var.max_receive_count
+    maxReceiveCount     = var.crawl_max_receive_count
   })
 
   tags = merge(local.common_tags, {

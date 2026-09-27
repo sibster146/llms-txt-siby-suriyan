@@ -32,15 +32,27 @@ variable "receive_wait_time_seconds" {
 }
 
 variable "visibility_timeout_seconds" {
-  description = "How long a received message remains hidden from other consumers."
+  description = "How long non-crawler messages remain hidden from other consumers."
   type        = number
   default     = 300
 }
 
+variable "crawl_visibility_timeout_seconds" {
+  description = "How long a failed crawl message remains hidden before retrying."
+  type        = number
+  default     = 30
+}
+
 variable "max_receive_count" {
-  description = "Number of failed receives before a message moves to its dead-letter queue."
+  description = "Number of failed parser receives before a message moves to its dead-letter queue."
   type        = number
   default     = 5
+}
+
+variable "crawl_max_receive_count" {
+  description = "Total crawl delivery attempts before a message moves to its dead-letter queue."
+  type        = number
+  default     = 4
 }
 
 variable "tags" {

@@ -26,6 +26,13 @@ SUPPORTED_CONTENT_TYPES = {
     "text/x-markdown",
 }
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+ACTIVE_PAGE_STATUSES = {
+    "DISCOVERED",
+    "PENDING",
+    "CRAWLING",
+    "CRAWLED",
+    "PARSE_PENDING",
+}
 
 
 class WebCrawlerError(Exception):
@@ -50,6 +57,10 @@ class UnsupportedContentTypeError(WebCrawlerError):
 
 class ResponseTooLargeError(WebCrawlerError):
     """Raised when a response exceeds the configured byte limit."""
+
+
+class PageNotFoundError(WebCrawlerError):
+    """Raised when a page returns HTTP 404 and should not be retried."""
 
 
 @dataclass(frozen=True)
@@ -116,6 +127,7 @@ class WebCrawlerService:
         s3: S3Client,
         sqs_client: Any,
         parse_queue_url: str,
+        llm_txt_queue_url: str,
         user_agent: str,
         request_timeout_seconds: float,
         max_response_bytes: int,
@@ -129,6 +141,7 @@ class WebCrawlerService:
         self.s3 = s3
         self.sqs_client = sqs_client
         self.parse_queue_url = parse_queue_url
+        self.llm_txt_queue_url = llm_txt_queue_url
         self.user_agent = user_agent
         self.request_timeout_seconds = request_timeout_seconds
         self.max_response_bytes = max_response_bytes
@@ -146,11 +159,9 @@ class WebCrawlerService:
             )
             existing_status = (existing_page or {}).get("status")
             if existing_status == "PARSE_PENDING":
-                self.crawl_runs.mark_crawled(
-                    site_id=request.site_id,
-                    crawl_run_id=request.crawl_run_id,
-                    updated_at=_utc_now(),
-                )
+                return
+            if existing_status == "FAILED":
+                self._publish_generation_if_complete(request)
                 return
             if existing_status in {"COMPLETED", "PARSED"}:
                 return
@@ -179,20 +190,29 @@ class WebCrawlerService:
                 canonical_url_hash=request.canonical_url_hash,
                 updated_at=_utc_now(),
             )
-            self.crawl_runs.mark_crawled(
-                site_id=request.site_id,
-                crawl_run_id=request.crawl_run_id,
-                updated_at=_utc_now(),
-            )
         except Exception as error:
-            self.crawl_pages.record_failure(
+            non_retryable = isinstance(error, (PageNotFoundError, ResponseTooLargeError))
+            exhausted = attempt >= self.max_attempts
+            terminal = non_retryable or exhausted
+            newly_failed = self.crawl_pages.record_failure(
                 crawl_run_id=request.crawl_run_id,
                 canonical_url_hash=request.canonical_url_hash,
                 error_message=str(error),
                 attempt=attempt,
-                terminal=attempt >= self.max_attempts,
+                terminal=terminal,
                 updated_at=_utc_now(),
             )
+            if terminal:
+                run_counts = None
+                if newly_failed:
+                    run_counts = self.crawl_runs.record_failed_page(
+                        site_id=request.site_id,
+                        crawl_run_id=request.crawl_run_id,
+                        updated_at=_utc_now(),
+                    )
+                self._publish_generation_if_complete(request, run_counts)
+                if non_retryable:
+                    return
             raise
 
     def _fetch_and_store(self, request: CrawlRequest) -> tuple[str, str, bool]:
@@ -292,6 +312,45 @@ class WebCrawlerService:
             MessageBody=json.dumps(body, separators=(",", ":")),
         )
 
+    def _publish_generation_if_complete(
+        self,
+        request: CrawlRequest,
+        run_counts: dict[str, Any] | None = None,
+    ) -> None:
+        if run_counts is not None and not _run_counts_complete(run_counts):
+            return
+        pages = self.crawl_pages.list_for_run(request.crawl_run_id)
+        if not pages or any(page.get("status") in ACTIVE_PAGE_STATUSES for page in pages):
+            return
+        claimed = self.crawl_runs.claim_generation(
+            site_id=request.site_id,
+            crawl_run_id=request.crawl_run_id,
+            updated_at=_utc_now(),
+        )
+        if not claimed:
+            return
+        try:
+            self.sqs_client.send_message(
+                QueueUrl=self.llm_txt_queue_url,
+                MessageBody=json.dumps(
+                    {
+                        "action": "generate_llms_txt",
+                        "payload": {
+                            "site_id": request.site_id,
+                            "crawl_run_id": request.crawl_run_id,
+                        },
+                    },
+                    separators=(",", ":"),
+                ),
+            )
+        except Exception:
+            self.crawl_runs.release_generation_claim(
+                site_id=request.site_id,
+                crawl_run_id=request.crawl_run_id,
+                updated_at=_utc_now(),
+            )
+            raise
+
 
 class _SafeRedirectHandler(HTTPRedirectHandler):
     def redirect_request(
@@ -345,7 +404,11 @@ def fetch_html_page(
             )
     except WebCrawlerError:
         raise
-    except (HTTPError, URLError, TimeoutError, OSError) as error:
+    except HTTPError as error:
+        if error.code == 404:
+            raise PageNotFoundError(f"Page not found at '{url}'") from error
+        raise WebCrawlerError(f"Failed to fetch '{url}': {error}") from error
+    except (URLError, TimeoutError, OSError) as error:
         raise WebCrawlerError(f"Failed to fetch '{url}': {error}") from error
 
 
@@ -412,6 +475,17 @@ def _required_string(payload: dict[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise CrawlMessageError(f"Crawl message {field} must be a non-empty string")
     return value.strip()
+
+
+def _run_counts_complete(run: dict[str, Any]) -> bool:
+    try:
+        pending = int(run["pending_page_count"])
+        discovered = int(run["discovered_page_count"])
+        completed = int(run["completed_page_count"])
+        failed = int(run["failed_page_count"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return pending == 0 and completed + failed == discovered
 
 
 def _utc_now() -> str:

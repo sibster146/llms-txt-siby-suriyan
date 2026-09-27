@@ -61,8 +61,7 @@ class CrawlPagesTable:
                     status="DISCOVERED",
                 ),
                 condition_expression=(
-                    Attr("crawl_run_id").not_exists()
-                    & Attr("canonical_url_hash").not_exists()
+                    Attr("crawl_run_id").not_exists() & Attr("canonical_url_hash").not_exists()
                 ),
             )
         except DynamoDBConditionNotMetError:
@@ -320,21 +319,26 @@ class CrawlPagesTable:
         attempt: int,
         terminal: bool,
         updated_at: str,
-    ) -> None:
-        self.dynamodb.update_item(
-            key={
-                "crawl_run_id": crawl_run_id,
-                "canonical_url_hash": canonical_url_hash,
-            },
-            update_expression=(
-                "SET #status = :status, last_error = :last_error, "
-                "crawl_attempt = :attempt, updated_at = :updated_at"
-            ),
-            expression_attribute_names={"#status": "status"},
-            expression_attribute_values={
-                ":status": "FAILED" if terminal else "PENDING",
-                ":last_error": error_message[:1000],
-                ":attempt": attempt,
-                ":updated_at": updated_at,
-            },
-        )
+    ) -> bool:
+        try:
+            self.dynamodb.update_item(
+                key={
+                    "crawl_run_id": crawl_run_id,
+                    "canonical_url_hash": canonical_url_hash,
+                },
+                update_expression=(
+                    "SET #status = :status, last_error = :last_error, "
+                    "crawl_attempt = :attempt, updated_at = :updated_at"
+                ),
+                expression_attribute_names={"#status": "status"},
+                expression_attribute_values={
+                    ":status": "FAILED" if terminal else "PENDING",
+                    ":last_error": error_message[:1000],
+                    ":attempt": attempt,
+                    ":updated_at": updated_at,
+                },
+                condition_expression=(Attr("status").ne("FAILED") if terminal else None),
+            )
+        except DynamoDBConditionNotMetError:
+            return False
+        return terminal

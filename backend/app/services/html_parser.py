@@ -226,13 +226,13 @@ class HtmlParserService:
                 parsed_content_s3_key=parsed_key,
                 parsed_at=parsed_at,
             )
-            self.crawl_runs.record_parsed_page(
+            run_counts = self.crawl_runs.record_parsed_page(
                 site_id=request.site_id,
                 crawl_run_id=request.crawl_run_id,
                 discovered_page_count=new_page_count,
                 updated_at=parsed_at,
             )
-            self._publish_generation_if_complete(request)
+            self._publish_generation_if_complete(request, run_counts)
         except Exception as error:
             self.crawl_pages.record_parse_failure(
                 crawl_run_id=request.crawl_run_id,
@@ -299,7 +299,13 @@ class HtmlParserService:
             )
         return created_count
 
-    def _publish_generation_if_complete(self, request: ParseRequest) -> None:
+    def _publish_generation_if_complete(
+        self,
+        request: ParseRequest,
+        run_counts: dict[str, Any] | None = None,
+    ) -> None:
+        if run_counts is not None and not _run_counts_complete(run_counts):
+            return
         pages = self.crawl_pages.list_for_run(request.crawl_run_id)
         if not pages or any(page.get("status") in ACTIVE_PAGE_STATUSES for page in pages):
             return
@@ -569,6 +575,17 @@ def _required_bool(payload: dict[str, Any], name: str) -> bool:
     if not isinstance(value, bool):
         raise ParseMessageError(f"{name} must be a boolean")
     return value
+
+
+def _run_counts_complete(run: dict[str, Any]) -> bool:
+    try:
+        pending = int(run["pending_page_count"])
+        discovered = int(run["discovered_page_count"])
+        completed = int(run["completed_page_count"])
+        failed = int(run["failed_page_count"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return pending == 0 and completed + failed == discovered
 
 
 def _utc_now() -> str:
