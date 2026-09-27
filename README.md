@@ -22,11 +22,12 @@ The `Deploy Dev` workflow creates the remote state bucket, applies Terraform, an
 
 Create `backend/.env` from `backend/.env.example`. Set `COGNITO_USER_POOL_ID` from
 `cognito_user_pool_id`, `COGNITO_APP_CLIENT_ID` from `cognito_web_client_id`, and
-`CRAWL_QUEUE_URL` from the `crawl` value in `sqs_queue_urls`.
+`CRAWL_QUEUE_URL` from the `crawl` value in `sqs_queue_urls`. For local development,
+set `AWS_PROFILE_NAME` to the AWS CLI profile that can access the development resources.
 
 ```bash
 source venv/bin/activate
-AWS_PROFILE='sibysuriya+30@gmail.com' uvicorn app.main:app --reload --app-dir backend
+uvicorn app.main:app --reload --app-dir backend
 ```
 
 The API runs at `http://localhost:8000`; interactive API documentation is available at `http://localhost:8000/docs`.

@@ -77,6 +77,7 @@ def test_settings_build_environment_specific_table_names(
     environment: str,
 ) -> None:
     monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_PROFILE_NAME", "")
     monkeypatch.setenv("ENVIRONMENT", environment)
     monkeypatch.setenv("PROJECT_NAME", "llms_txt")
     monkeypatch.setenv("APPLICATION_S3_BUCKET", "dev-llms-txt-s3-test")

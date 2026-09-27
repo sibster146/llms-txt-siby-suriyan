@@ -1,6 +1,7 @@
 import os
 
 os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("AWS_PROFILE_NAME", "")
 os.environ.setdefault("ENVIRONMENT", "dev")
 os.environ.setdefault("PROJECT_NAME", "llms_txt")
 os.environ.setdefault("APPLICATION_S3_BUCKET", "dev-llms-txt-s3-test")

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     aws_region: str = Field(alias="AWS_REGION", min_length=1)
+    aws_profile_name: str = Field(alias="AWS_PROFILE_NAME")
     environment: Literal["dev", "prod"] = Field(alias="ENVIRONMENT")
     project_name: str = Field(
         alias="PROJECT_NAME",

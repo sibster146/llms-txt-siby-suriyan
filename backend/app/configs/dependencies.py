@@ -26,7 +26,10 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 @lru_cache
 def get_boto3_session() -> boto3.Session:
     settings = get_settings()
-    return boto3.Session(region_name=settings.aws_region)
+    return boto3.Session(
+        profile_name=settings.aws_profile_name or None,
+        region_name=settings.aws_region,
+    )
 
 
 @lru_cache
@@ -42,6 +45,12 @@ def get_s3_boto_client() -> Any:
 
 
 @lru_cache
+def get_cognito_boto_client() -> Any:
+    settings = get_settings()
+    return get_boto3_session().client("cognito-idp", region_name=settings.aws_region)
+
+
+@lru_cache
 def get_sqs_boto_client() -> Any:
     settings = get_settings()
     return get_boto3_session().client("sqs", region_name=settings.aws_region)
@@ -49,7 +58,7 @@ def get_sqs_boto_client() -> Any:
 
 @lru_cache
 def get_cognito_client() -> CognitoClient:
-    return CognitoClient(get_settings())
+    return CognitoClient(get_settings(), client=get_cognito_boto_client())
 
 
 @lru_cache
