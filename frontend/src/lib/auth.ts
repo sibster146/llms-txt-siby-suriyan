@@ -1,6 +1,7 @@
 import { Amplify } from 'aws-amplify'
 import {
   confirmResetPassword,
+  fetchAuthSession,
   getCurrentUser,
   resetPassword,
   signIn,
@@ -65,6 +66,15 @@ export async function authenticate(email: string, password: string): Promise<Aut
 
 export async function endSession(): Promise<void> {
   await signOut()
+}
+
+export async function getAccessToken(): Promise<string> {
+  const session = await fetchAuthSession()
+  const accessToken = session.tokens?.accessToken
+  if (!accessToken) {
+    throw new Error('Your session has expired. Sign in again.')
+  }
+  return accessToken.toString()
 }
 
 export async function startPasswordReset(email: string): Promise<void> {

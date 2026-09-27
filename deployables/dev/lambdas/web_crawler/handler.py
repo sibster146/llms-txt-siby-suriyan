@@ -21,6 +21,7 @@ from app.clients.dynamodb import DynamoDBClient
 from app.clients.s3 import S3Client
 from app.services.web_crawler import CrawlMessageError, WebCrawlerService
 from app.tables.crawl_pages import CrawlPagesTable
+from app.tables.crawl_runs import CrawlRunsTable
 
 
 @lru_cache
@@ -32,6 +33,9 @@ def _web_crawler_service() -> WebCrawlerService:
     return WebCrawlerService(
         crawl_pages=CrawlPagesTable(
             DynamoDBClient(table=dynamodb.Table(_required_env("CRAWL_PAGES_TABLE")))
+        ),
+        crawl_runs=CrawlRunsTable(
+            DynamoDBClient(table=dynamodb.Table(_required_env("CRAWL_RUNS_TABLE")))
         ),
         s3=S3Client(
             client=session.client("s3", region_name=region),

@@ -29,6 +29,7 @@ Each image is tagged with its Git commit SHA and pushed to the environment's ECR
 
 - `AWS_REGION`
 - `CRAWL_PAGES_TABLE`
+- `CRAWL_RUNS_TABLE`
 - `APPLICATION_S3_BUCKET`
 - `PARSE_QUEUE_URL`
 - `CRAWLER_USER_AGENT`

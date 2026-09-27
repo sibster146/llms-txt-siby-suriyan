@@ -54,6 +54,12 @@ data "aws_iam_policy_document" "permissions" {
   }
 
   statement {
+    sid       = "UpdateCrawlRunStatus"
+    actions   = ["dynamodb:UpdateItem"]
+    resources = [var.crawl_runs_table_arn]
+  }
+
+  statement {
     sid       = "StoreRawHtml"
     actions   = ["s3:PutObject"]
     resources = ["${var.application_bucket_arn}/raw/*"]
@@ -95,6 +101,7 @@ resource "aws_lambda_function" "this" {
       CRAWLER_REQUEST_TIMEOUT_SECONDS = tostring(var.request_timeout_seconds)
       CRAWLER_USER_AGENT              = var.user_agent
       CRAWL_PAGES_TABLE               = var.crawl_pages_table_name
+      CRAWL_RUNS_TABLE                = var.crawl_runs_table_name
       PARSE_QUEUE_URL                 = var.parse_queue_url
     }
   }

@@ -50,6 +50,8 @@ module "web_crawler_lambda" {
   parse_queue_url         = module.sqs.queue_urls.parse
   crawl_pages_table_name  = module.dynamodb.table_names.crawl_pages
   crawl_pages_table_arn   = module.dynamodb.table_arns.crawl_pages
+  crawl_runs_table_name   = module.dynamodb.table_names.crawl_runs
+  crawl_runs_table_arn    = module.dynamodb.table_arns.crawl_runs
   application_bucket_name = module.s3.bucket_name
   application_bucket_arn  = module.s3.bucket_arn
   max_attempts            = 5

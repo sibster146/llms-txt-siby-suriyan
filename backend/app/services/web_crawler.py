@@ -16,6 +16,7 @@ from urllib.robotparser import RobotFileParser
 
 from app.clients.s3 import S3Client
 from app.tables.crawl_pages import CrawlPagesTable
+from app.tables.crawl_runs import CrawlRunsTable
 
 HTML_CONTENT_TYPES = {"application/xhtml+xml", "text/html"}
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
@@ -104,6 +105,7 @@ class WebCrawlerService:
         self,
         *,
         crawl_pages: CrawlPagesTable,
+        crawl_runs: CrawlRunsTable,
         s3: S3Client,
         sqs_client: Any,
         parse_queue_url: str,
@@ -115,6 +117,7 @@ class WebCrawlerService:
         robots_checker: RobotsChecker | None = None,
     ) -> None:
         self.crawl_pages = crawl_pages
+        self.crawl_runs = crawl_runs
         self.s3 = s3
         self.sqs_client = sqs_client
         self.parse_queue_url = parse_queue_url
@@ -133,8 +136,24 @@ class WebCrawlerService:
                 crawl_run_id=request.crawl_run_id,
                 canonical_url_hash=request.canonical_url_hash,
             )
-            if existing_page and existing_page.get("status") in {"PARSE_PENDING", "COMPLETED"}:
+            existing_status = (existing_page or {}).get("status")
+            if existing_status == "PARSE_PENDING":
+                self.crawl_runs.update_status(
+                    site_id=request.site_id,
+                    crawl_run_id=request.crawl_run_id,
+                    crawl_status="CRAWLED",
+                    updated_at=_utc_now(),
+                )
                 return
+            if existing_status == "COMPLETED":
+                return
+
+            self.crawl_runs.update_status(
+                site_id=request.site_id,
+                crawl_run_id=request.crawl_run_id,
+                crawl_status="WORKING",
+                updated_at=_utc_now(),
+            )
 
             raw_html_s3_key = str((existing_page or {}).get("raw_html_s3_key", ""))
             final_url = str((existing_page or {}).get("final_url", request.url))
@@ -145,6 +164,12 @@ class WebCrawlerService:
             self.crawl_pages.mark_parse_pending(
                 crawl_run_id=request.crawl_run_id,
                 canonical_url_hash=request.canonical_url_hash,
+                updated_at=_utc_now(),
+            )
+            self.crawl_runs.update_status(
+                site_id=request.site_id,
+                crawl_run_id=request.crawl_run_id,
+                crawl_status="CRAWLED",
                 updated_at=_utc_now(),
             )
         except Exception as error:

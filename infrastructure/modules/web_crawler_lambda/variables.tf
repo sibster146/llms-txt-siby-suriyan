@@ -44,6 +44,16 @@ variable "crawl_pages_table_arn" {
   description = "DynamoDB crawl-pages table ARN."
 }
 
+variable "crawl_runs_table_name" {
+  type        = string
+  description = "DynamoDB crawl-runs table name."
+}
+
+variable "crawl_runs_table_arn" {
+  type        = string
+  description = "DynamoDB crawl-runs table ARN."
+}
+
 variable "application_bucket_name" {
   type        = string
   description = "S3 bucket used for raw HTML."

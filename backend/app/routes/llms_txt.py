@@ -18,13 +18,24 @@ from app.configs.dependencies import (
     get_sites_table,
     get_user_sites_table,
 )
-from app.schemas.llms_txt import CreateLlmsTxtRequest, CreateLlmsTxtResponse
+from app.schemas.llms_txt import (
+    CrawlStatusResponse,
+    CreateLlmsTxtRequest,
+    CreateLlmsTxtResponse,
+)
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 from app.tables.sites import SitesTable
 from app.tables.user_sites import UserSitesTable
 
 router = APIRouter(prefix="/llms-txt", tags=["llms.txt"])
+
+
+def _crawl_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Crawl not found.",
+    )
 
 
 def _canonicalize_url(url: HttpUrl) -> str:
@@ -118,3 +129,32 @@ def create_llms_txt(
         url=canonical_url,
         status="PENDING",
     )
+
+
+@router.get(
+    "/{site_id}/crawls/{crawl_run_id}",
+    response_model=CrawlStatusResponse,
+)
+def get_crawl_status(
+    site_id: str,
+    crawl_run_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
+    crawl_runs: Annotated[CrawlRunsTable, Depends(get_crawl_runs_table)],
+) -> CrawlStatusResponse:
+    try:
+        if user_sites.get(user_id=user_id, site_id=site_id) is None:
+            raise _crawl_not_found()
+        crawl_run = crawl_runs.get(site_id=site_id, crawl_run_id=crawl_run_id)
+    except HTTPException:
+        raise
+    except DynamoDBClientError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The crawl status could not be loaded.",
+        ) from error
+
+    if crawl_run is None:
+        raise _crawl_not_found()
+
+    return CrawlStatusResponse.model_validate(crawl_run)

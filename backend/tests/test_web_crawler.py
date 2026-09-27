@@ -33,6 +33,14 @@ class FakeCrawlPagesTable:
         self.calls.append(("record_failure", kwargs))
 
 
+class FakeCrawlRunsTable:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def update_status(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
+
+
 class FakeS3Client:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
@@ -69,6 +77,7 @@ def _service(
     sqs: FakeSQSClient,
     *,
     robots_allowed: bool = True,
+    crawl_runs: FakeCrawlRunsTable | None = None,
 ) -> WebCrawlerService:
     def fetch_page(*_: Any) -> FetchedPage:
         return FetchedPage(
@@ -81,6 +90,7 @@ def _service(
 
     return WebCrawlerService(
         crawl_pages=crawl_pages,
+        crawl_runs=crawl_runs or FakeCrawlRunsTable(),
         s3=s3,
         sqs_client=sqs,
         parse_queue_url="https://sqs.example/parse",
@@ -97,8 +107,9 @@ def test_crawler_stores_html_and_queues_parsing() -> None:
     crawl_pages = FakeCrawlPagesTable(existing={"status": "PENDING"})
     s3 = FakeS3Client()
     sqs = FakeSQSClient()
+    crawl_runs = FakeCrawlRunsTable()
 
-    _service(crawl_pages, s3, sqs).process_message(_message())
+    _service(crawl_pages, s3, sqs, crawl_runs=crawl_runs).process_message(_message())
 
     key = next(iter(s3.objects))
     assert key.startswith("raw/site-1/crawl-1/")
@@ -108,6 +119,7 @@ def test_crawler_stores_html_and_queues_parsing() -> None:
         "mark_crawled",
         "mark_parse_pending",
     ]
+    assert [call["crawl_status"] for call in crawl_runs.calls] == ["WORKING", "CRAWLED"]
     queued = json.loads(sqs.messages[0]["MessageBody"])
     assert queued["action"] == "parse_page"
     assert queued["payload"]["raw_html_s3_key"] == key
@@ -129,6 +141,21 @@ def test_crawler_reuses_stored_html_when_queue_delivery_is_retried() -> None:
     assert s3.objects == {}
     assert [name for name, _ in crawl_pages.calls] == ["mark_parse_pending"]
     assert len(sqs.messages) == 1
+
+
+def test_crawler_repairs_run_status_after_parse_was_already_queued() -> None:
+    crawl_pages = FakeCrawlPagesTable(existing={"status": "PARSE_PENDING"})
+    crawl_runs = FakeCrawlRunsTable()
+
+    _service(
+        crawl_pages,
+        FakeS3Client(),
+        FakeSQSClient(),
+        crawl_runs=crawl_runs,
+    ).process_message(_message(), attempt=2)
+
+    assert crawl_pages.calls == []
+    assert crawl_runs.calls[0]["crawl_status"] == "CRAWLED"
 
 
 def test_crawler_records_retryable_robots_failure() -> None:

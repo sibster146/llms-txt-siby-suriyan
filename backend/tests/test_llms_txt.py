@@ -17,8 +17,13 @@ from app.routes.llms_txt import router
 
 
 class FakeTable:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(
+        self,
+        fail: bool = False,
+        item: dict[str, Any] | None = None,
+    ) -> None:
         self.fail = fail
+        self.item = item
         self.calls: list[dict[str, Any]] = []
 
     def _record(self, operation: str, kwargs: dict[str, Any]) -> None:
@@ -37,6 +42,10 @@ class FakeTable:
 
     def update_status(self, **kwargs: Any) -> None:
         self._record("update_status", kwargs)
+
+    def get(self, **kwargs: Any) -> dict[str, Any] | None:
+        self._record("get", kwargs)
+        return self.item
 
 
 class FakeQueue:
@@ -212,3 +221,43 @@ def test_create_llms_txt_marks_run_failed_when_queueing_fails() -> None:
     }
     assert crawl_runs.calls[-1]["operation"] == "update_status"
     assert crawl_runs.calls[-1]["crawl_status"] == "FAILED"
+
+
+def test_get_crawl_status_returns_owned_crawl() -> None:
+    user_sites = FakeTable(item={"user_id": "user-123", "site_id": "site-1"})
+    crawl_runs = FakeTable(
+        item={
+            "site_id": "site-1",
+            "crawl_run_id": "crawl-1",
+            "status": "WORKING",
+            "pending_page_count": 2,
+            "discovered_page_count": 4,
+            "completed_page_count": 1,
+            "failed_page_count": 1,
+            "created_at": "2026-09-27T01:00:00+00:00",
+            "updated_at": "2026-09-27T01:01:00+00:00",
+        }
+    )
+    app = _test_app(FakeTable(), user_sites, crawl_runs, FakeTable())
+
+    with TestClient(app) as client:
+        response = client.get("/llms-txt/site-1/crawls/crawl-1")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "WORKING"
+    assert response.json()["discovered_page_count"] == 4
+    assert user_sites.calls[0]["user_id"] == "user-123"
+
+
+def test_get_crawl_status_hides_crawls_not_owned_by_user() -> None:
+    user_sites = FakeTable(item=None)
+    crawl_runs = FakeTable(
+        item={"site_id": "site-1", "crawl_run_id": "crawl-1", "status": "PENDING"}
+    )
+    app = _test_app(FakeTable(), user_sites, crawl_runs, FakeTable())
+
+    with TestClient(app) as client:
+        response = client.get("/llms-txt/site-1/crawls/crawl-1")
+
+    assert response.status_code == 404
+    assert crawl_runs.calls == []
