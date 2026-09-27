@@ -1,6 +1,8 @@
 from typing import Any
 
-from app.clients.dynamodb import DynamoDBClient
+from boto3.dynamodb.conditions import Attr
+
+from app.clients.dynamodb import DynamoDBClient, DynamoDBConditionNotMetError
 
 
 class CrawlRunsTable:
@@ -54,6 +56,82 @@ class CrawlRunsTable:
                 ":updated_at": updated_at,
             },
         )
+
+    def mark_crawled(
+        self,
+        *,
+        site_id: str,
+        crawl_run_id: str,
+        updated_at: str,
+    ) -> None:
+        try:
+            self.dynamodb.update_item(
+                key={"site_id": site_id, "crawl_run_id": crawl_run_id},
+                update_expression="SET #status = :status, updated_at = :updated_at",
+                expression_attribute_names={"#status": "status"},
+                expression_attribute_values={
+                    ":status": "CRAWLED",
+                    ":updated_at": updated_at,
+                },
+                condition_expression=(
+                    Attr("status").not_exists()
+                    | (
+                        Attr("status").ne("GENERATION_QUEUED")
+                        & Attr("status").ne("COMPLETED")
+                    )
+                ),
+            )
+        except DynamoDBConditionNotMetError:
+            return
+
+    def claim_generation(
+        self,
+        *,
+        site_id: str,
+        crawl_run_id: str,
+        updated_at: str,
+    ) -> bool:
+        try:
+            self.dynamodb.update_item(
+                key={"site_id": site_id, "crawl_run_id": crawl_run_id},
+                update_expression="SET #status = :status, updated_at = :updated_at",
+                expression_attribute_names={"#status": "status"},
+                expression_attribute_values={
+                    ":status": "GENERATION_QUEUED",
+                    ":updated_at": updated_at,
+                },
+                condition_expression=(
+                    Attr("status").not_exists()
+                    | (
+                        Attr("status").ne("GENERATION_QUEUED")
+                        & Attr("status").ne("COMPLETED")
+                    )
+                ),
+            )
+        except DynamoDBConditionNotMetError:
+            return False
+        return True
+
+    def release_generation_claim(
+        self,
+        *,
+        site_id: str,
+        crawl_run_id: str,
+        updated_at: str,
+    ) -> None:
+        try:
+            self.dynamodb.update_item(
+                key={"site_id": site_id, "crawl_run_id": crawl_run_id},
+                update_expression="SET #status = :status, updated_at = :updated_at",
+                expression_attribute_names={"#status": "status"},
+                expression_attribute_values={
+                    ":status": "CRAWLED",
+                    ":updated_at": updated_at,
+                },
+                condition_expression=Attr("status").eq("GENERATION_QUEUED"),
+            )
+        except DynamoDBConditionNotMetError:
+            return
 
     def record_parsed_page(
         self,

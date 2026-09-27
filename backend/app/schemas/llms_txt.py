@@ -19,7 +19,14 @@ class CreateLlmsTxtResponse(BaseModel):
 class CrawlStatusResponse(BaseModel):
     site_id: str
     crawl_run_id: str
-    status: Literal["PENDING", "WORKING", "CRAWLED", "COMPLETED", "FAILED"]
+    status: Literal[
+        "PENDING",
+        "WORKING",
+        "CRAWLED",
+        "GENERATION_QUEUED",
+        "COMPLETED",
+        "FAILED",
+    ]
     pending_page_count: int
     discovered_page_count: int
     completed_page_count: int

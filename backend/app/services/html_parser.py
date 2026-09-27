@@ -13,7 +13,7 @@ import trafilatura
 from lxml import html
 
 from app.clients.s3 import S3Client
-from app.clients.sqs import SQSClient
+from app.clients.sqs import SQSClient, SQSClientError
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 
@@ -278,15 +278,30 @@ class HtmlParserService:
         pages = self.crawl_pages.list_for_run(request.crawl_run_id)
         if not pages or any(page.get("status") in ACTIVE_PAGE_STATUSES for page in pages):
             return
-        self.llm_txt_queue.send_json(
-            {
-                "action": "generate_llms_txt",
-                "payload": {
-                    "site_id": request.site_id,
-                    "crawl_run_id": request.crawl_run_id,
-                },
-            }
+        claimed = self.crawl_runs.claim_generation(
+            site_id=request.site_id,
+            crawl_run_id=request.crawl_run_id,
+            updated_at=_utc_now(),
         )
+        if not claimed:
+            return
+        try:
+            self.llm_txt_queue.send_json(
+                {
+                    "action": "generate_llms_txt",
+                    "payload": {
+                        "site_id": request.site_id,
+                        "crawl_run_id": request.crawl_run_id,
+                    },
+                }
+            )
+        except SQSClientError:
+            self.crawl_runs.release_generation_claim(
+                site_id=request.site_id,
+                crawl_run_id=request.crawl_run_id,
+                updated_at=_utc_now(),
+            )
+            raise
 
 
 def extract_child_urls(

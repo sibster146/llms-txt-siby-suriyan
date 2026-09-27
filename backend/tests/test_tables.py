@@ -152,6 +152,36 @@ def test_crawl_runs_table_records_parser_progress() -> None:
     assert values[":completed"] == 1
 
 
+def test_crawl_runs_table_claims_generation_atomically() -> None:
+    dynamodb = RecordingDynamoDBClient()
+
+    claimed = CrawlRunsTable(dynamodb).claim_generation(
+        site_id="site-1",
+        crawl_run_id="crawl-1",
+        updated_at="2026-09-27T03:00:00+00:00",
+    )
+
+    assert claimed
+    assert dynamodb.updates[0]["expression_attribute_values"][":status"] == (
+        "GENERATION_QUEUED"
+    )
+    assert dynamodb.updates[0]["condition_expression"] is not None
+
+
+def test_crawl_runs_table_rejects_a_duplicate_generation_claim() -> None:
+    class AlreadyClaimedDynamoDBClient(RecordingDynamoDBClient):
+        def update_item(self, **kwargs: Any) -> None:
+            raise DynamoDBConditionNotMetError("already claimed")
+
+    claimed = CrawlRunsTable(AlreadyClaimedDynamoDBClient()).claim_generation(
+        site_id="site-1",
+        crawl_run_id="crawl-1",
+        updated_at="2026-09-27T03:00:00+00:00",
+    )
+
+    assert not claimed
+
+
 def test_llms_txt_versions_table_creates_a_version() -> None:
     dynamodb = RecordingDynamoDBClient()
 

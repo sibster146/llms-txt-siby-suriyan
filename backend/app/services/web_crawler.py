@@ -141,10 +141,9 @@ class WebCrawlerService:
             )
             existing_status = (existing_page or {}).get("status")
             if existing_status == "PARSE_PENDING":
-                self.crawl_runs.update_status(
+                self.crawl_runs.mark_crawled(
                     site_id=request.site_id,
                     crawl_run_id=request.crawl_run_id,
-                    crawl_status="CRAWLED",
                     updated_at=_utc_now(),
                 )
                 return
@@ -177,10 +176,9 @@ class WebCrawlerService:
                 canonical_url_hash=request.canonical_url_hash,
                 updated_at=_utc_now(),
             )
-            self.crawl_runs.update_status(
+            self.crawl_runs.mark_crawled(
                 site_id=request.site_id,
                 crawl_run_id=request.crawl_run_id,
-                crawl_status="CRAWLED",
                 updated_at=_utc_now(),
             )
         except Exception as error:

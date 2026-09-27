@@ -6,7 +6,13 @@ interface ApiError {
   detail?: string
 }
 
-export type CrawlStatus = 'PENDING' | 'WORKING' | 'CRAWLED' | 'COMPLETED' | 'FAILED'
+export type CrawlStatus =
+  | 'PENDING'
+  | 'WORKING'
+  | 'CRAWLED'
+  | 'GENERATION_QUEUED'
+  | 'COMPLETED'
+  | 'FAILED'
 
 export interface CreateCrawlResponse {
   site_id: string

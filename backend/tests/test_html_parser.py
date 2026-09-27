@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from app.clients.sqs import SQSClientError
 from app.services.html_parser import (
     HtmlParserService,
     ParseMessageError,
@@ -54,10 +55,22 @@ class FakeCrawlPagesTable:
 class FakeCrawlRunsTable:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.generation_claimed = False
+        self.releases = 0
 
     def record_parsed_page(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
         return {}
+
+    def claim_generation(self, **_: Any) -> bool:
+        if self.generation_claimed:
+            return False
+        self.generation_claimed = True
+        return True
+
+    def release_generation_claim(self, **_: Any) -> None:
+        self.generation_claimed = False
+        self.releases += 1
 
 
 class FakeS3Client:
@@ -84,6 +97,11 @@ class FakeQueue:
     def send_json(self, message: dict[str, Any]) -> str:
         self.messages.append(message)
         return "message-1"
+
+
+class FailingQueue(FakeQueue):
+    def send_json(self, message: dict[str, Any]) -> str:
+        raise SQSClientError("queue unavailable")
 
 
 def _message(*, unchanged: bool = False) -> dict[str, Any]:
@@ -201,6 +219,22 @@ def test_parser_queues_generation_when_every_page_is_terminal() -> None:
             "payload": {"site_id": "site-1", "crawl_run_id": "crawl-1"},
         }
     ]
+
+    service.process_message(_message())
+
+    assert len(llm_queue.messages) == 1
+
+
+def test_parser_releases_generation_claim_when_queueing_fails() -> None:
+    raw_html = b"<html><body><main>Standalone page content.</main></body></html>"
+    service, _, _, _, _ = _service(raw_html)
+    service.llm_txt_queue = FailingQueue()
+
+    with pytest.raises(SQSClientError):
+        service.process_message(_message())
+
+    assert service.crawl_runs.releases == 1
+    assert not service.crawl_runs.generation_claimed
 
 
 def test_link_discovery_stops_at_the_configured_depth() -> None:

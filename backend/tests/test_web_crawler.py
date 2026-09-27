@@ -48,6 +48,9 @@ class FakeCrawlRunsTable:
     def update_status(self, **kwargs: Any) -> None:
         self.calls.append(kwargs)
 
+    def mark_crawled(self, **kwargs: Any) -> None:
+        self.calls.append({**kwargs, "crawl_status": "CRAWLED"})
+
 
 class FakeSitesTable:
     def __init__(self) -> None:
