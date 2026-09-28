@@ -106,15 +106,16 @@ resource "aws_lambda_function" "this" {
 
   environment {
     variables = {
-      APPLICATION_S3_BUCKET     = var.application_bucket_name
-      CRAWL_PAGES_TABLE         = var.crawl_pages_table_name
-      CRAWL_RUNS_TABLE          = var.crawl_runs_table_name
-      CRAWL_QUEUE_URL           = var.crawl_queue_url
-      LLM_TXT_QUEUE_URL         = var.llm_txt_queue_url
-      PARSER_MAX_ATTEMPTS       = tostring(var.max_attempts)
-      PARSER_MAX_DEPTH          = tostring(var.max_depth)
-      PARSER_MAX_LINKS_PER_PAGE = tostring(var.max_links_per_page)
-      PARSER_VERSION            = var.parser_version
+      APPLICATION_S3_BUCKET       = var.application_bucket_name
+      CRAWL_PAGES_TABLE           = var.crawl_pages_table_name
+      CRAWL_RUNS_TABLE            = var.crawl_runs_table_name
+      CRAWL_QUEUE_URL             = var.crawl_queue_url
+      LLM_TXT_QUEUE_URL           = var.llm_txt_queue_url
+      PARSER_MAX_ATTEMPTS         = tostring(var.max_attempts)
+      PARSER_MAX_DEPTH            = tostring(var.max_depth)
+      PARSER_MAX_DISCOVERED_PAGES = tostring(var.max_discovered_pages)
+      PARSER_MAX_LINKS_PER_PAGE   = tostring(var.max_links_per_page)
+      PARSER_VERSION              = var.parser_version
     }
   }
 
@@ -135,4 +136,8 @@ resource "aws_lambda_event_source_mapping" "parse_queue" {
   enabled                 = true
   batch_size              = 1
   function_response_types = ["ReportBatchItemFailures"]
+
+  scaling_config {
+    maximum_concurrency = var.maximum_concurrency
+  }
 }

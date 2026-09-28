@@ -152,6 +152,7 @@ class HtmlParserService:
         parser_version: str,
         max_depth: int,
         max_links_per_page: int,
+        max_discovered_pages: int,
         max_attempts: int,
         sitemap_discoverer: SitemapDiscoverer | None = None,
     ) -> None:
@@ -163,6 +164,7 @@ class HtmlParserService:
         self.parser_version = parser_version
         self.max_depth = max_depth
         self.max_links_per_page = max_links_per_page
+        self.max_discovered_pages = max_discovered_pages
         self.max_attempts = max_attempts
         self.sitemap_discoverer = sitemap_discoverer or discover_sitemap_urls
 
@@ -268,7 +270,7 @@ class HtmlParserService:
                     },
                 )
 
-            new_page_count = self._queue_child_pages(request, child_urls)
+            self._queue_child_pages(request, child_urls)
             parsed_at = _utc_now()
             self.crawl_pages.mark_parsed(
                 crawl_run_id=request.crawl_run_id,
@@ -279,7 +281,6 @@ class HtmlParserService:
             run_counts = self.crawl_runs.record_parsed_page(
                 site_id=request.site_id,
                 crawl_run_id=request.crawl_run_id,
-                discovered_page_count=new_page_count,
                 updated_at=parsed_at,
             )
             self._publish_generation_if_complete(request, run_counts)
@@ -306,49 +307,80 @@ class HtmlParserService:
         self,
         request: ParseRequest,
         child_urls: list[str],
-    ) -> int:
-        created_count = 0
+    ) -> None:
         timestamp = _utc_now()
         for child_url in child_urls:
             child_hash = sha256(child_url.encode()).hexdigest()
-            created = self.crawl_pages.create_if_absent(
-                crawl_run_id=request.crawl_run_id,
-                canonical_url_hash=child_hash,
-                site_id=request.site_id,
-                url=child_url,
-                depth=request.depth + 1,
-                parent_url=request.final_url,
-                created_at=timestamp,
-            )
-            if created:
-                created_count += 1
-
             child = self.crawl_pages.get(
                 crawl_run_id=request.crawl_run_id,
                 canonical_url_hash=child_hash,
             )
-            if not created and (child or {}).get("status") != "DISCOVERED":
+            if child is not None:
+                if child.get("status") == "DISCOVERED":
+                    self._queue_child_page(request, child_url, child_hash)
                 continue
 
-            self.crawl_queue.send_json(
-                {
-                    "action": "crawl_url",
-                    "payload": {
-                        "site_id": request.site_id,
-                        "crawl_run_id": request.crawl_run_id,
-                        "root_url": request.root_url,
-                        "url": child_url,
-                        "canonical_url_hash": child_hash,
-                        "depth": request.depth + 1,
-                    },
-                }
-            )
-            self.crawl_pages.mark_queued(
+            reserved = self.crawl_runs.reserve_discovered_page(
+                site_id=request.site_id,
                 crawl_run_id=request.crawl_run_id,
-                canonical_url_hash=child_hash,
-                updated_at=_utc_now(),
+                max_discovered_pages=self.max_discovered_pages,
+                updated_at=timestamp,
             )
-        return created_count
+            if not reserved:
+                break
+
+            try:
+                created = self.crawl_pages.create_if_absent(
+                    crawl_run_id=request.crawl_run_id,
+                    canonical_url_hash=child_hash,
+                    site_id=request.site_id,
+                    url=child_url,
+                    depth=request.depth + 1,
+                    parent_url=request.final_url,
+                    created_at=timestamp,
+                )
+            except Exception:
+                self.crawl_runs.release_discovered_page(
+                    site_id=request.site_id,
+                    crawl_run_id=request.crawl_run_id,
+                    updated_at=_utc_now(),
+                )
+                raise
+
+            if not created:
+                self.crawl_runs.release_discovered_page(
+                    site_id=request.site_id,
+                    crawl_run_id=request.crawl_run_id,
+                    updated_at=_utc_now(),
+                )
+                continue
+
+            self._queue_child_page(request, child_url, child_hash)
+
+    def _queue_child_page(
+        self,
+        request: ParseRequest,
+        child_url: str,
+        child_hash: str,
+    ) -> None:
+        self.crawl_queue.send_json(
+            {
+                "action": "crawl_url",
+                "payload": {
+                    "site_id": request.site_id,
+                    "crawl_run_id": request.crawl_run_id,
+                    "root_url": request.root_url,
+                    "url": child_url,
+                    "canonical_url_hash": child_hash,
+                    "depth": request.depth + 1,
+                },
+            }
+        )
+        self.crawl_pages.mark_queued(
+            crawl_run_id=request.crawl_run_id,
+            canonical_url_hash=child_hash,
+            updated_at=_utc_now(),
+        )
 
     def _publish_generation_if_complete(
         self,

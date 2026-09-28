@@ -1,3 +1,10 @@
-aws_region   = "us-east-1"
-project_name = "llms_txt"
-web_crawler_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/dev_llms_txt_web_crawler:git-sha"
+aws_region                      = "us-east-1"
+project_name                    = "llms_txt"
+web_crawler_image_uri           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/dev_llms_txt_web_crawler:git-sha"
+html_parser_image_uri           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/dev_llms_txt_html_parser:git-sha"
+parser_max_attempts             = 5
+parser_max_depth                = 2
+parser_max_discovered_pages     = 1000
+parser_max_links_per_page       = 100
+parser_maximum_concurrency      = 25
+parser_memory_size              = 2048

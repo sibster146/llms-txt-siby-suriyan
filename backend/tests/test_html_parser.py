@@ -72,14 +72,29 @@ class FakeCrawlRunsTable:
         self.calls: list[dict[str, Any]] = []
         self.generation_claimed = False
         self.releases = 0
+        self.pending_page_count = 1
+        self.discovered_page_count = 1
+        self.completed_page_count = 0
+
+    def reserve_discovered_page(self, *, max_discovered_pages: int, **_: Any) -> bool:
+        if self.discovered_page_count >= max_discovered_pages:
+            return False
+        self.pending_page_count += 1
+        self.discovered_page_count += 1
+        return True
+
+    def release_discovered_page(self, **_: Any) -> None:
+        self.pending_page_count -= 1
+        self.discovered_page_count -= 1
 
     def record_parsed_page(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
-        new_pages = kwargs["discovered_page_count"]
+        self.pending_page_count -= 1
+        self.completed_page_count += 1
         return {
-            "pending_page_count": new_pages,
-            "discovered_page_count": 1 + new_pages,
-            "completed_page_count": 1,
+            "pending_page_count": self.pending_page_count,
+            "discovered_page_count": self.discovered_page_count,
+            "completed_page_count": self.completed_page_count,
             "failed_page_count": 0,
         }
 
@@ -150,6 +165,7 @@ def _service(
     existing_parsed: bool = False,
     content_type: str = "text/html",
     sitemap_urls: list[str] | None = None,
+    max_discovered_pages: int = 1000,
 ) -> tuple[HtmlParserService, FakeCrawlPagesTable, FakeS3Client, FakeQueue, FakeQueue]:
     message = _message(unchanged=unchanged)
     payload = message["payload"]
@@ -181,6 +197,7 @@ def _service(
             parser_version="v1",
             max_depth=3,
             max_links_per_page=20,
+            max_discovered_pages=max_discovered_pages,
             max_attempts=5,
             sitemap_discoverer=lambda *_: sitemap_urls or [],
         ),
@@ -355,6 +372,26 @@ def test_root_parser_seeds_in_scope_sitemap_urls_before_page_links() -> None:
     assert all(
         message["payload"]["root_url"] == "https://example.com/" for message in crawl_queue.messages
     )
+
+
+def test_parser_stops_discovery_at_the_run_page_limit() -> None:
+    raw_html = b"""
+        <html><body>
+        <a href='/a'>A</a><a href='/b'>B</a><a href='/c'>C</a>
+        </body></html>
+    """
+    service, pages, _, crawl_queue, _ = _service(
+        raw_html,
+        max_discovered_pages=2,
+    )
+
+    service.process_message(_message())
+
+    assert [message["payload"]["url"] for message in crawl_queue.messages] == [
+        "https://example.com/a"
+    ]
+    assert len(pages.pages) == 2
+    assert service.crawl_runs.discovered_page_count == 2
 
 
 def test_sitemap_discovery_follows_indexes_and_filters_to_root_path(

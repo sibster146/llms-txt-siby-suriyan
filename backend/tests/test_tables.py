@@ -157,14 +157,44 @@ def test_crawl_runs_table_records_parser_progress() -> None:
     CrawlRunsTable(dynamodb).record_parsed_page(
         site_id="site-1",
         crawl_run_id="crawl-1",
-        discovered_page_count=3,
         updated_at="2026-09-27T02:00:00+00:00",
     )
 
     values = dynamodb.updates[0]["expression_attribute_values"]
-    assert values[":pending_delta"] == 2
-    assert values[":discovered"] == 3
+    assert values[":pending"] == -1
     assert values[":completed"] == 1
+
+
+def test_crawl_runs_table_reserves_discovery_capacity_atomically() -> None:
+    dynamodb = RecordingDynamoDBClient()
+
+    reserved = CrawlRunsTable(dynamodb).reserve_discovered_page(
+        site_id="site-1",
+        crawl_run_id="crawl-1",
+        max_discovered_pages=1000,
+        updated_at="2026-09-27T02:00:00+00:00",
+    )
+
+    assert reserved
+    values = dynamodb.updates[0]["expression_attribute_values"]
+    assert values[":one"] == 1
+    assert values[":max_discovered_pages"] == 1000
+    assert dynamodb.updates[0]["condition_expression"] is not None
+
+
+def test_crawl_runs_table_rejects_discovery_at_capacity() -> None:
+    class FullCrawlDynamoDBClient(RecordingDynamoDBClient):
+        def update_item(self, **kwargs: Any) -> None:
+            raise DynamoDBConditionNotMetError("crawl is at capacity")
+
+    reserved = CrawlRunsTable(FullCrawlDynamoDBClient()).reserve_discovered_page(
+        site_id="site-1",
+        crawl_run_id="crawl-1",
+        max_discovered_pages=1000,
+        updated_at="2026-09-27T02:00:00+00:00",
+    )
+
+    assert not reserved
 
 
 def test_crawl_runs_table_records_terminal_crawl_failure() -> None:

@@ -92,6 +92,17 @@ variable "max_links_per_page" {
   default     = 100
 }
 
+variable "max_discovered_pages" {
+  type        = number
+  description = "Maximum total pages discovered during one crawl run, including the root page."
+  default     = 1000
+
+  validation {
+    condition     = var.max_discovered_pages >= 1
+    error_message = "max_discovered_pages must be at least 1."
+  }
+}
+
 variable "max_attempts" {
   type        = number
   description = "Number of parser deliveries before the message reaches its DLQ."
@@ -102,6 +113,17 @@ variable "memory_size" {
   type        = number
   description = "Lambda memory allocation in MB."
   default     = 1024
+}
+
+variable "maximum_concurrency" {
+  type        = number
+  description = "Maximum number of concurrent parser invocations started by the parse queue."
+  default     = 25
+
+  validation {
+    condition     = var.maximum_concurrency >= 2 && var.maximum_concurrency <= 1000
+    error_message = "maximum_concurrency must be between 2 and 1000."
+  }
 }
 
 variable "timeout_seconds" {

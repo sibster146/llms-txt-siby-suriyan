@@ -71,6 +71,16 @@ The GitHub `dev` environment must define:
 - `AWS_REGION`
 - `AWS_DEPLOY_ROLE_ARN`
 
+The following optional GitHub `dev` environment variables control parser behavior and
+capacity without requiring code changes:
+
+- `PARSER_MAX_ATTEMPTS` (default: `5`)
+- `PARSER_MAX_DEPTH` (default: `2`)
+- `PARSER_MAX_DISCOVERED_PAGES` (default: `1000`, including the root page)
+- `PARSER_MAX_LINKS_PER_PAGE` (default: `100`)
+- `PARSER_MAXIMUM_CONCURRENCY` (default: `25`)
+- `PARSER_MEMORY_SIZE` (default: `2048` MB)
+
 Attach the permissions in `github-actions-dev-policy.json` to that deployment role. The state bucket is named `dev-llms-txt-<account-id>-terraform-state`; S3 bucket names cannot contain underscores, so this is the AWS-required exception to the resource naming convention.
 
 For local validation without applying infrastructure:

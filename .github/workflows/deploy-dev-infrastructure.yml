@@ -23,6 +23,12 @@ jobs:
     environment: dev
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_VAR_parser_max_attempts: ${{ vars.PARSER_MAX_ATTEMPTS || '5' }}
+      TF_VAR_parser_max_depth: ${{ vars.PARSER_MAX_DEPTH || '2' }}
+      TF_VAR_parser_max_discovered_pages: ${{ vars.PARSER_MAX_DISCOVERED_PAGES || '1000' }}
+      TF_VAR_parser_max_links_per_page: ${{ vars.PARSER_MAX_LINKS_PER_PAGE || '100' }}
+      TF_VAR_parser_maximum_concurrency: ${{ vars.PARSER_MAXIMUM_CONCURRENCY || '25' }}
+      TF_VAR_parser_memory_size: ${{ vars.PARSER_MEMORY_SIZE || '2048' }}
       TF_IN_AUTOMATION: true
       TF_INPUT: false
     steps:

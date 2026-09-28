@@ -93,7 +93,10 @@ module "html_parser_lambda" {
   application_bucket_name = module.s3.bucket_name
   application_bucket_arn  = module.s3.bucket_arn
   parser_version          = "v1"
-  max_attempts            = 5
-  max_depth               = 3
-  max_links_per_page      = 100
+  max_attempts            = var.parser_max_attempts
+  max_depth               = var.parser_max_depth
+  max_discovered_pages    = var.parser_max_discovered_pages
+  max_links_per_page      = var.parser_max_links_per_page
+  maximum_concurrency     = var.parser_maximum_concurrency
+  memory_size             = var.parser_memory_size
 }

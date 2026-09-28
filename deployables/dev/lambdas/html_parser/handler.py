@@ -48,6 +48,7 @@ def _html_parser_service() -> HtmlParserService:
         parser_version=_required_env("PARSER_VERSION"),
         max_depth=int(_required_env("PARSER_MAX_DEPTH")),
         max_links_per_page=int(_required_env("PARSER_MAX_LINKS_PER_PAGE")),
+        max_discovered_pages=int(_required_env("PARSER_MAX_DISCOVERED_PAGES")),
         max_attempts=int(_required_env("PARSER_MAX_ATTEMPTS")),
     )
 

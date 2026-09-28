@@ -133,26 +133,67 @@ class CrawlRunsTable:
         *,
         site_id: str,
         crawl_run_id: str,
-        discovered_page_count: int,
         updated_at: str,
     ) -> dict[str, Any]:
-        pending_delta = discovered_page_count - 1
         attributes = self.dynamodb.update_item(
             key={"site_id": site_id, "crawl_run_id": crawl_run_id},
             update_expression=(
                 "SET updated_at = :updated_at "
-                "ADD pending_page_count :pending_delta, "
-                "discovered_page_count :discovered, completed_page_count :completed "
+                "ADD pending_page_count :pending, completed_page_count :completed"
             ),
             expression_attribute_values={
-                ":pending_delta": pending_delta,
-                ":discovered": discovered_page_count,
+                ":pending": -1,
                 ":completed": 1,
                 ":updated_at": updated_at,
             },
             return_values="ALL_NEW",
         )
         return attributes or {}
+
+    def reserve_discovered_page(
+        self,
+        *,
+        site_id: str,
+        crawl_run_id: str,
+        max_discovered_pages: int,
+        updated_at: str,
+    ) -> bool:
+        try:
+            self.dynamodb.update_item(
+                key={"site_id": site_id, "crawl_run_id": crawl_run_id},
+                update_expression=(
+                    "SET updated_at = :updated_at "
+                    "ADD pending_page_count :one, discovered_page_count :one"
+                ),
+                expression_attribute_values={
+                    ":one": 1,
+                    ":max_discovered_pages": max_discovered_pages,
+                    ":updated_at": updated_at,
+                },
+                condition_expression=Attr("discovered_page_count").lt(max_discovered_pages),
+            )
+        except DynamoDBConditionNotMetError:
+            return False
+        return True
+
+    def release_discovered_page(
+        self,
+        *,
+        site_id: str,
+        crawl_run_id: str,
+        updated_at: str,
+    ) -> None:
+        self.dynamodb.update_item(
+            key={"site_id": site_id, "crawl_run_id": crawl_run_id},
+            update_expression=(
+                "SET updated_at = :updated_at "
+                "ADD pending_page_count :minus_one, discovered_page_count :minus_one"
+            ),
+            expression_attribute_values={
+                ":minus_one": -1,
+                ":updated_at": updated_at,
+            },
+        )
 
     def record_failed_page(
         self,
