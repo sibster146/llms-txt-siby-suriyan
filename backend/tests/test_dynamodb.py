@@ -95,6 +95,42 @@ def test_update_item_identifies_a_failed_condition() -> None:
     assert error.value.code == "DYNAMODB_CONDITION_NOT_MET"
 
 
+def test_query_loads_every_page_when_no_limit_is_set() -> None:
+    class PaginatedTable:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def query(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            if "ExclusiveStartKey" not in kwargs:
+                return {"Items": [{"id": "1"}], "LastEvaluatedKey": {"id": "1"}}
+            return {"Items": [{"id": "2"}]}
+
+    table = PaginatedTable()
+
+    items = DynamoDBClient(table).query("condition")
+
+    assert items == [{"id": "1"}, {"id": "2"}]
+    assert table.calls[1]["ExclusiveStartKey"] == {"id": "1"}
+
+
+def test_query_honors_an_explicit_limit_without_pagination() -> None:
+    class LimitedTable:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def query(self, **_: Any) -> dict[str, Any]:
+            self.calls += 1
+            return {"Items": [{"id": "1"}], "LastEvaluatedKey": {"id": "1"}}
+
+    table = LimitedTable()
+
+    items = DynamoDBClient(table).query("condition", Limit=1)
+
+    assert items == [{"id": "1"}]
+    assert table.calls == 1
+
+
 @pytest.mark.parametrize("environment", ["dev", "prod"])
 def test_settings_build_environment_specific_table_names(
     monkeypatch: pytest.MonkeyPatch,
@@ -118,7 +154,4 @@ def test_settings_build_environment_specific_table_names(
     assert settings.user_sites_dynamodb_table == f"{environment}_llms_txt_user_sites"
     assert settings.crawl_runs_dynamodb_table == f"{environment}_llms_txt_crawl_runs"
     assert settings.crawl_pages_dynamodb_table == f"{environment}_llms_txt_crawl_pages"
-    assert (
-        settings.llms_txt_versions_dynamodb_table
-        == f"{environment}_llms_txt_llms_txt_versions"
-    )
+    assert settings.llms_txt_versions_dynamodb_table == f"{environment}_llms_txt_llms_txt_versions"

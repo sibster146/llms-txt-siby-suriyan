@@ -20,6 +20,11 @@ variable "html_parser_image_uri" {
   type        = string
 }
 
+variable "llms_txt_generator_image_uri" {
+  description = "Commit-tagged ECR image URI for the llms.txt generator Lambda."
+  type        = string
+}
+
 variable "parser_max_attempts" {
   description = "Maximum parser deliveries before a message reaches the DLQ."
   type        = number
@@ -54,4 +59,52 @@ variable "parser_memory_size" {
   description = "Parser Lambda memory allocation in MB."
   type        = number
   default     = 2048
+}
+
+variable "generator_model_id" {
+  description = "Amazon Bedrock model used to create the llms.txt plan."
+  type        = string
+  default     = "amazon.nova-pro-v1:0"
+}
+
+variable "generator_max_input_pages" {
+  description = "Maximum parsed pages supplied to the generator."
+  type        = number
+  default     = 500
+}
+
+variable "generator_max_output_links" {
+  description = "Maximum links allowed in the generated llms.txt."
+  type        = number
+  default     = 200
+}
+
+variable "generator_max_excerpt_chars" {
+  description = "Maximum parsed-content characters supplied per page."
+  type        = number
+  default     = 1000
+}
+
+variable "generator_max_model_tokens" {
+  description = "Maximum tokens returned by Amazon Bedrock."
+  type        = number
+  default     = 8000
+}
+
+variable "generator_maximum_concurrency" {
+  description = "Maximum concurrent generator invocations started by SQS."
+  type        = number
+  default     = 2
+}
+
+variable "generator_memory_size" {
+  description = "Generator Lambda memory allocation in MB."
+  type        = number
+  default     = 1024
+}
+
+variable "generator_timeout_seconds" {
+  description = "Generator Lambda timeout in seconds."
+  type        = number
+  default     = 300
 }

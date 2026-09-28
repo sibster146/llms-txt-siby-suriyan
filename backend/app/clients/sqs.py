@@ -17,12 +17,18 @@ class SQSClient:
         self.client = client
         self.queue_url = queue_url
 
-    def send_json(self, message: dict[str, Any]) -> str:
+    def send_json(self, message: dict[str, Any], *, delay_seconds: int | None = None) -> str:
+        request: dict[str, Any] = {
+            "QueueUrl": self.queue_url,
+            "MessageBody": json.dumps(message, separators=(",", ":")),
+        }
+        if delay_seconds is not None:
+            if not 0 <= delay_seconds <= 900:
+                raise ValueError("delay_seconds must be between 0 and 900")
+            request["DelaySeconds"] = delay_seconds
+
         try:
-            response = self.client.send_message(
-                QueueUrl=self.queue_url,
-                MessageBody=json.dumps(message, separators=(",", ":")),
-            )
+            response = self.client.send_message(**request)
         except Exception as error:
             raise SQSClientError(
                 f"Failed to send SQS message: {error}",

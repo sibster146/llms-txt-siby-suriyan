@@ -66,12 +66,8 @@ class DynamoDBClient:
         try:
             self.table.put_item(**kwargs)
         except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == (
-                "ConditionalCheckFailedException"
-            ):
-                raise DynamoDBConditionNotMetError(
-                    "DynamoDB put condition was not met."
-                ) from error
+            if error.response.get("Error", {}).get("Code") == ("ConditionalCheckFailedException"):
+                raise DynamoDBConditionNotMetError("DynamoDB put condition was not met.") from error
             raise DynamoDBClientError(
                 message=f"Failed to put item into DynamoDB: {error}",
                 code="DYNAMODB_PUT_ITEM_FAILED",
@@ -129,14 +125,26 @@ class DynamoDBClient:
         return response.get("Item")
 
     def query(self, key_condition: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        query_kwargs = dict(kwargs)
+        paginate = "Limit" not in query_kwargs
+        items: list[dict[str, Any]] = []
         try:
-            response = self.table.query(KeyConditionExpression=key_condition, **kwargs)
+            while True:
+                response = self.table.query(
+                    KeyConditionExpression=key_condition,
+                    **query_kwargs,
+                )
+                items.extend(response.get("Items", []))
+                last_key = response.get("LastEvaluatedKey")
+                if not paginate or not last_key:
+                    break
+                query_kwargs["ExclusiveStartKey"] = last_key
         except Exception as error:
             raise DynamoDBClientError(
                 message=f"Failed to query DynamoDB: {error}",
                 code="DYNAMODB_QUERY_FAILED",
             ) from error
-        return response.get("Items", [])
+        return items
 
     def scan(self, filter_expression: Any = None, **kwargs: Any) -> list[dict[str, Any]]:
         if filter_expression is not None:
@@ -168,9 +176,7 @@ class DynamoDBClient:
         if expression_attribute_names:
             kwargs["ExpressionAttributeNames"] = expression_attribute_names
         if expression_attribute_values:
-            kwargs["ExpressionAttributeValues"] = to_dynamodb_value(
-                expression_attribute_values
-            )
+            kwargs["ExpressionAttributeValues"] = to_dynamodb_value(expression_attribute_values)
         if condition_expression is not None:
             kwargs["ConditionExpression"] = condition_expression
         if return_values:
@@ -179,9 +185,7 @@ class DynamoDBClient:
         try:
             response = self.table.update_item(**kwargs)
         except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == (
-                "ConditionalCheckFailedException"
-            ):
+            if error.response.get("Error", {}).get("Code") == ("ConditionalCheckFailedException"):
                 raise DynamoDBConditionNotMetError(
                     "DynamoDB update condition was not met."
                 ) from error

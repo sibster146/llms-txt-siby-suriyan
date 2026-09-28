@@ -54,8 +54,7 @@ class SitesTable:
                     ":modified_at": modified_at,
                 },
                 condition_expression=(
-                    Attr("modified_at").not_exists()
-                    | Attr("modified_at").lt(modified_at)
+                    Attr("modified_at").not_exists() | Attr("modified_at").lt(modified_at)
                 ),
             )
         except DynamoDBConditionNotMetError:
@@ -63,3 +62,25 @@ class SitesTable:
 
     def get(self, site_id: str) -> dict[str, Any] | None:
         return self.dynamodb.get_item(key={"site_id": site_id})
+
+    def mark_generation_completed(
+        self,
+        *,
+        site_id: str,
+        crawl_run_id: str,
+        version_id: str,
+        generated_at: str,
+    ) -> None:
+        self.dynamodb.update_item(
+            key={"site_id": site_id},
+            update_expression=(
+                "SET current_llms_txt_version_id = :version_id, "
+                "last_generated_crawl_run_id = :crawl_run_id, "
+                "llms_txt_generated_at = :generated_at"
+            ),
+            expression_attribute_values={
+                ":version_id": version_id,
+                ":crawl_run_id": crawl_run_id,
+                ":generated_at": generated_at,
+            },
+        )

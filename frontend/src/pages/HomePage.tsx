@@ -23,17 +23,18 @@ import type { AuthenticatedUser } from '../lib/auth'
 
 interface HomePageProps {
   onSignOut: () => Promise<void>
+  onSelectSite: (siteId: string) => void
   user: AuthenticatedUser
 }
 
-const terminalStatuses: CrawlStatus[] = ['GENERATION_QUEUED', 'COMPLETED', 'FAILED']
+const terminalStatuses: CrawlStatus[] = ['COMPLETED', 'FAILED']
 
 function statusLabel(status: CrawlStatus): string {
   const label = status.toLowerCase().replaceAll('_', ' ')
   return label.charAt(0).toUpperCase() + label.slice(1)
 }
 
-export function HomePage({ onSignOut, user }: HomePageProps) {
+export function HomePage({ onSelectSite, onSignOut, user }: HomePageProps) {
   const [signingOut, setSigningOut] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [url, setUrl] = useState('')
@@ -195,26 +196,36 @@ export function HomePage({ onSignOut, user }: HomePageProps) {
               const crawlStatus = crawl?.status
               return (
                 <div className="site-entry" key={site.site_id}>
-                  <article className="crawl-item">
-                    <div className="crawl-icon"><Globe2 size={20} /></div>
-                    <div className="crawl-primary">
-                      <strong>{site.root_url}</strong>
-                      <span>{crawl?.crawl_run_id ?? site.last_crawl_run_id}</span>
-                    </div>
-                    {crawlStatus && (
-                      <div className={`status-badge status-${crawlStatus.toLowerCase()}`}>
-                        {crawlStatus === 'GENERATION_QUEUED' || crawlStatus === 'COMPLETED' ? <CheckCircle2 size={15} /> : crawlStatus === 'FAILED' ? <AlertCircle size={15} /> : crawlStatus === 'WORKING' || crawlStatus === 'CRAWLED' ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
-                        {statusLabel(crawlStatus)}
+                  <a
+                    className="site-entry-link"
+                    href={`/sites/${encodeURIComponent(site.site_id)}`}
+                    onClick={(event) => {
+                      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+                      event.preventDefault()
+                      onSelectSite(site.site_id)
+                    }}
+                  >
+                    <article className="crawl-item">
+                      <div className="crawl-icon"><Globe2 size={20} /></div>
+                      <div className="crawl-primary">
+                        <strong>{site.root_url}</strong>
+                        <span>{crawl?.crawl_run_id ?? site.last_crawl_run_id}</span>
+                      </div>
+                      {crawlStatus && (
+                        <div className={`status-badge status-${crawlStatus.toLowerCase()}`}>
+                          {crawlStatus === 'COMPLETED' ? <CheckCircle2 size={15} /> : crawlStatus === 'FAILED' ? <AlertCircle size={15} /> : crawlStatus === 'WORKING' || crawlStatus === 'CRAWLED' || crawlStatus === 'GENERATION_QUEUED' || crawlStatus === 'GENERATING' ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
+                          {statusLabel(crawlStatus)}
+                        </div>
+                      )}
+                    </article>
+                    {crawl && (
+                      <div className="crawl-counts">
+                        <span>{crawl.discovered_page_count} discovered</span>
+                        <span>{crawl.completed_page_count} completed</span>
+                        <span>{crawl.failed_page_count} failed</span>
                       </div>
                     )}
-                  </article>
-                  {crawl && (
-                    <div className="crawl-counts">
-                      <span>{crawl.discovered_page_count} discovered</span>
-                      <span>{crawl.completed_page_count} completed</span>
-                      <span>{crawl.failed_page_count} failed</span>
-                    </div>
-                  )}
+                  </a>
                 </div>
               )
             })}

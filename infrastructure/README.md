@@ -39,8 +39,9 @@ The development configuration creates three encrypted queues:
 - `dev_llms_txt_parse_sqs`
 - `dev_llms_txt_llm_txt_sqs`
 
-All queues use long polling, retain messages for four days, and have a five-minute visibility timeout.
-The crawl and parser queues move failed messages to their respective dead-letter queues after five receives.
+All queues use long polling and retain messages for four days. The generator queue uses a
+30-minute visibility timeout so a Bedrock request can finish before SQS makes the message
+available again. Each workflow queue has its own dead-letter queue.
 
 ## Development S3
 
@@ -54,6 +55,25 @@ The web crawler is deployed as the `dev_llms_txt_web_crawler` Lambda using an im
 
 The parser is deployed as the `dev_llms_txt_html_parser` Lambda using an image in the immutable `dev_llms_txt_html_parser` ECR repository. It consumes the parse queue, stores changed page content under the S3 `parsed/` prefix, rediscovers same-site child links, and publishes those links to the crawl queue. When every page in a crawl is terminal, it publishes the run to the `llm_txt` queue.
 
+## Development llms.txt generator
+
+The generator is deployed as the `dev_llms_txt_generator` Lambda using an image
+in the matching ECR repository. It consumes `llm_txt_sqs`, reads parsed crawl content,
+uses Amazon Nova Pro to curate a structured plan, validates and renders the plan, and
+falls back to deterministic generation when the model response is unavailable or invalid.
+Generated files are stored under `llms-txt/{site_id}/{version_id}/llms.txt`, and the
+corresponding DynamoDB site, crawl-run, and version records are updated after the object
+has been written.
+
+## SQS worker leases
+
+SQS provides at-least-once delivery, so every worker claims its unit of work with a
+conditional DynamoDB update before performing external work. The crawler and parser use
+page-level `CRAWLING` and `PARSING` leases; the generator uses a crawl-run-level
+`GENERATING` lease. A competing invocation leaves the message unacknowledged for retry.
+Handled failures release ownership immediately, while a crashed or timed-out invocation
+can be recovered after its stored lease-expiration timestamp.
+
 ## GitHub Actions deployment
 
 Pushes to `feature/**` and `dev` run `.github/workflows/deploy-dev-infrastructure.yml`. The workflow:
@@ -61,10 +81,10 @@ Pushes to `feature/**` and `dev` run `.github/workflows/deploy-dev-infrastructur
 1. Assumes the AWS deployment role through GitHub OIDC.
 2. Creates the encrypted, versioned development state bucket if it does not exist.
 3. Initializes Terraform with S3 state and native state locking.
-4. Provisions both Lambda ECR repositories in a targeted bootstrap apply.
-5. Builds the crawler and parser images and pushes them with the Git commit SHA as their immutable tag.
+4. Provisions all three Lambda ECR repositories in a targeted bootstrap apply.
+5. Builds the crawler, parser, and generator images and pushes them with the Git commit SHA as their immutable tag.
 6. Plans and applies the complete development infrastructure using that image.
-7. Writes Cognito, crawler, and parser deployment details to the workflow summary.
+7. Writes Cognito and Lambda deployment details to the workflow summary.
 
 The GitHub `dev` environment must define:
 
@@ -80,6 +100,17 @@ capacity without requiring code changes:
 - `PARSER_MAX_LINKS_PER_PAGE` (default: `100`)
 - `PARSER_MAXIMUM_CONCURRENCY` (default: `25`)
 - `PARSER_MEMORY_SIZE` (default: `2048` MB)
+
+The following optional variables control generator behavior and capacity:
+
+- `GENERATOR_MODEL_ID` (default: `amazon.nova-pro-v1:0`)
+- `GENERATOR_MAX_INPUT_PAGES` (default: `500`)
+- `GENERATOR_MAX_OUTPUT_LINKS` (default: `200`)
+- `GENERATOR_MAX_EXCERPT_CHARS` (default: `1000`)
+- `GENERATOR_MAX_MODEL_TOKENS` (default: `8000`)
+- `GENERATOR_MAXIMUM_CONCURRENCY` (default: `2`)
+- `GENERATOR_MEMORY_SIZE` (default: `1024` MB)
+- `GENERATOR_TIMEOUT_SECONDS` (default: `300`)
 
 Attach the permissions in `github-actions-dev-policy.json` to that deployment role. The state bucket is named `dev-llms-txt-<account-id>-terraform-state`; S3 bucket names cannot contain underscores, so this is the AWS-required exception to the resource naming convention.
 

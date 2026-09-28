@@ -10,6 +10,8 @@ from app.configs.dependencies import (
     get_crawl_queue_client,
     get_crawl_runs_table,
     get_current_user_id,
+    get_llms_txt_versions_table,
+    get_s3_client,
     get_sites_table,
     get_user_sites_table,
 )
@@ -60,6 +62,10 @@ class FakeTable:
         self._record("list_for_user", {"user_id": user_id})
         return self.items
 
+    def list_for_site(self, site_id: str) -> list[dict[str, Any]]:
+        self._record("list_for_site", {"site_id": site_id})
+        return self.items
+
 
 class FakeQueue:
     def __init__(self, fail: bool = False) -> None:
@@ -73,6 +79,16 @@ class FakeQueue:
         return "message-123"
 
 
+class FakeS3:
+    def __init__(self, objects: dict[str, str] | None = None) -> None:
+        self.objects = objects or {}
+        self.keys: list[str] = []
+
+    def get_text(self, key: str) -> str:
+        self.keys.append(key)
+        return self.objects[key]
+
+
 def _test_app(
     sites: FakeTable,
     user_sites: FakeTable,
@@ -81,6 +97,8 @@ def _test_app(
     *,
     authenticated: bool = True,
     crawl_queue: FakeQueue | None = None,
+    versions: FakeTable | None = None,
+    s3: FakeS3 | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -89,6 +107,8 @@ def _test_app(
     app.dependency_overrides[get_crawl_runs_table] = lambda: crawl_runs
     app.dependency_overrides[get_crawl_pages_table] = lambda: crawl_pages
     app.dependency_overrides[get_crawl_queue_client] = lambda: crawl_queue or FakeQueue()
+    app.dependency_overrides[get_llms_txt_versions_table] = lambda: versions or FakeTable()
+    app.dependency_overrides[get_s3_client] = lambda: s3 or FakeS3()
     if authenticated:
         app.dependency_overrides[get_current_user_id] = lambda: "user-123"
     return app
@@ -346,3 +366,100 @@ def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
         "operation": "list_for_user",
         "user_id": "user-123",
     }
+
+
+def test_get_site_detail_returns_current_content_and_version_history() -> None:
+    site = {
+        "site_id": "site-1",
+        "root_url": "https://example.com/",
+        "last_crawl_run_id": "crawl-2",
+        "current_llms_txt_version_id": "version-2",
+        "created_at": "2026-09-26T12:00:00+00:00",
+        "updated_at": "2026-09-28T12:00:00+00:00",
+        "modified_at": "2026-09-28T11:00:00+00:00",
+    }
+    version_records = [
+        {
+            "site_id": "site-1",
+            "version_id": "version-2",
+            "crawl_run_id": "crawl-2",
+            "llms_txt_s3_key": "llms-txt/site-1/version-2/llms.txt",
+            "content_hash": "hash-2",
+            "status": "CURRENT",
+            "generated_at": "2026-09-28T12:00:00+00:00",
+            "generation_method": "AMAZON_NOVA_PRO",
+            "model_id": "amazon.nova-pro-v1:0",
+        },
+        {
+            "site_id": "site-1",
+            "version_id": "version-1",
+            "crawl_run_id": "crawl-1",
+            "llms_txt_s3_key": "llms-txt/site-1/version-1/llms.txt",
+            "content_hash": "hash-1",
+            "status": "CURRENT",
+            "generated_at": "2026-09-27T12:00:00+00:00",
+            "generation_method": "DETERMINISTIC_FALLBACK",
+        },
+    ]
+    versions = FakeTable(items=version_records)
+    s3 = FakeS3({"llms-txt/site-1/version-2/llms.txt": "# Example\n"})
+    app = _test_app(
+        FakeTable(item=site),
+        FakeTable(item={"user_id": "user-123", "site_id": "site-1"}),
+        FakeTable(),
+        FakeTable(),
+        versions=versions,
+        s3=s3,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/llms-txt/sites/site-1")
+
+    assert response.status_code == 200
+    assert response.json()["current_version"]["version_id"] == "version-2"
+    assert response.json()["current_version"]["content"] == "# Example\n"
+    assert [version["version_id"] for version in response.json()["versions"]] == [
+        "version-2",
+        "version-1",
+    ]
+    assert s3.keys == ["llms-txt/site-1/version-2/llms.txt"]
+
+
+def test_get_llms_txt_version_returns_owned_version_content() -> None:
+    version = {
+        "site_id": "site-1",
+        "version_id": "version-1",
+        "crawl_run_id": "crawl-1",
+        "llms_txt_s3_key": "llms-txt/site-1/version-1/llms.txt",
+        "content_hash": "hash-1",
+        "status": "CURRENT",
+        "generated_at": "2026-09-27T12:00:00+00:00",
+        "generation_method": "DETERMINISTIC_FALLBACK",
+    }
+    s3 = FakeS3({"llms-txt/site-1/version-1/llms.txt": "# Previous\n"})
+    app = _test_app(
+        FakeTable(),
+        FakeTable(item={"user_id": "user-123", "site_id": "site-1"}),
+        FakeTable(),
+        FakeTable(),
+        versions=FakeTable(item=version),
+        s3=s3,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/llms-txt/sites/site-1/versions/version-1")
+
+    assert response.status_code == 200
+    assert response.json()["version_id"] == "version-1"
+    assert response.json()["content"] == "# Previous\n"
+
+
+def test_get_site_detail_hides_sites_not_owned_by_user() -> None:
+    sites = FakeTable(item={"site_id": "site-1"})
+    app = _test_app(sites, FakeTable(item=None), FakeTable(), FakeTable())
+
+    with TestClient(app) as client:
+        response = client.get("/llms-txt/sites/site-1")
+
+    assert response.status_code == 404
+    assert sites.calls == []

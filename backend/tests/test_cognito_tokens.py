@@ -31,8 +31,7 @@ def _create_token(
 ) -> str:
     now = datetime.now(UTC)
     issuer = (
-        f"https://cognito-idp.{settings.aws_region}.amazonaws.com/"
-        f"{settings.cognito_user_pool_id}"
+        f"https://cognito-idp.{settings.aws_region}.amazonaws.com/{settings.cognito_user_pool_id}"
     )
     return jwt.encode(
         {

@@ -131,9 +131,11 @@ def get_crawl_pages_table() -> CrawlPagesTable:
 def get_llms_txt_versions_table() -> LlmsTxtVersionsTable:
     return LlmsTxtVersionsTable(get_llms_txt_versions_dynamodb_client())
 
+
 #################################
 ############ SECURITY ###########
 #################################
+
 
 @lru_cache
 def get_cognito_token_verifier() -> CognitoTokenVerifier:

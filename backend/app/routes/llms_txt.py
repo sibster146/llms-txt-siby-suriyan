@@ -9,12 +9,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import HttpUrl
 
 from app.clients.dynamodb import DynamoDBClientError
+from app.clients.s3 import S3Client, S3ClientError
 from app.clients.sqs import SQSClient, SQSClientError
 from app.configs.dependencies import (
     get_crawl_pages_table,
     get_crawl_queue_client,
     get_crawl_runs_table,
     get_current_user_id,
+    get_llms_txt_versions_table,
+    get_s3_client,
     get_sites_table,
     get_user_sites_table,
 )
@@ -22,10 +25,13 @@ from app.schemas.llms_txt import (
     CrawlStatusResponse,
     CreateLlmsTxtRequest,
     CreateLlmsTxtResponse,
+    LlmsTxtVersionResponse,
+    SiteDetailResponse,
     SiteSummaryResponse,
 )
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
+from app.tables.llms_txt_versions import LlmsTxtVersionsTable
 from app.tables.sites import SitesTable
 from app.tables.user_sites import UserSitesTable
 
@@ -36,6 +42,20 @@ def _crawl_not_found() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail="Crawl not found.",
+    )
+
+
+def _site_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Website not found.",
+    )
+
+
+def _version_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="llms.txt version not found.",
     )
 
 
@@ -82,6 +102,84 @@ def list_user_sites(
         reverse=True,
     )
     return [SiteSummaryResponse.model_validate(site) for site in site_records]
+
+
+@router.get("/sites/{site_id}", response_model=SiteDetailResponse)
+def get_site_detail(
+    site_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    sites: Annotated[SitesTable, Depends(get_sites_table)],
+    user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
+    versions: Annotated[LlmsTxtVersionsTable, Depends(get_llms_txt_versions_table)],
+    s3: Annotated[S3Client, Depends(get_s3_client)],
+) -> SiteDetailResponse:
+    try:
+        if user_sites.get(user_id=user_id, site_id=site_id) is None:
+            raise _site_not_found()
+        site = sites.get(site_id)
+        if site is None:
+            raise _site_not_found()
+        version_records = versions.list_for_site(site_id)
+        current_version_id = site.get("current_llms_txt_version_id")
+        current_record = next(
+            (
+                version
+                for version in version_records
+                if version.get("version_id") == current_version_id
+            ),
+            None,
+        )
+        current_version = None
+        if current_record is not None:
+            current_version = {
+                **current_record,
+                "content": s3.get_text(str(current_record["llms_txt_s3_key"])),
+            }
+    except HTTPException:
+        raise
+    except (DynamoDBClientError, S3ClientError, KeyError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The website details could not be loaded.",
+        ) from error
+
+    return SiteDetailResponse.model_validate(
+        {
+            **site,
+            "current_version": current_version,
+            "versions": version_records,
+        }
+    )
+
+
+@router.get(
+    "/sites/{site_id}/versions/{version_id}",
+    response_model=LlmsTxtVersionResponse,
+)
+def get_llms_txt_version(
+    site_id: str,
+    version_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
+    versions: Annotated[LlmsTxtVersionsTable, Depends(get_llms_txt_versions_table)],
+    s3: Annotated[S3Client, Depends(get_s3_client)],
+) -> LlmsTxtVersionResponse:
+    try:
+        if user_sites.get(user_id=user_id, site_id=site_id) is None:
+            raise _version_not_found()
+        version = versions.get(site_id=site_id, version_id=version_id)
+        if version is None:
+            raise _version_not_found()
+        content = s3.get_text(str(version["llms_txt_s3_key"]))
+    except HTTPException:
+        raise
+    except (DynamoDBClientError, S3ClientError, KeyError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The llms.txt version could not be loaded.",
+        ) from error
+
+    return LlmsTxtVersionResponse.model_validate({**version, "content": content})
 
 
 @router.post("", response_model=CreateLlmsTxtResponse, status_code=status.HTTP_201_CREATED)

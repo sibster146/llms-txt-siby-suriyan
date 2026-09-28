@@ -77,3 +77,18 @@ output "html_parser_lambda_arn" {
   description = "Development HTML parser Lambda function ARN."
   value       = module.html_parser_lambda.function_arn
 }
+
+output "llms_txt_generator_ecr_repository_url" {
+  description = "ECR repository used by the llms.txt generator Lambda."
+  value       = module.llms_txt_generator_ecr.repository_url
+}
+
+output "llms_txt_generator_lambda_name" {
+  description = "Development llms.txt generator Lambda function name."
+  value       = module.llms_txt_generator_lambda.function_name
+}
+
+output "llms_txt_generator_lambda_arn" {
+  description = "Development llms.txt generator Lambda function ARN."
+  value       = module.llms_txt_generator_lambda.function_arn
+}

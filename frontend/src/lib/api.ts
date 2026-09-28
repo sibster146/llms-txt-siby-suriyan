@@ -11,6 +11,7 @@ export type CrawlStatus =
   | 'WORKING'
   | 'CRAWLED'
   | 'GENERATION_QUEUED'
+  | 'GENERATING'
   | 'COMPLETED'
   | 'FAILED'
 
@@ -41,6 +42,31 @@ export interface SiteSummary {
   updated_at: string
   modified_at: string | null
   latest_crawl: CrawlStatusResponse | null
+}
+
+export interface LlmsTxtVersionSummary {
+  site_id: string
+  version_id: string
+  crawl_run_id: string
+  generated_at: string
+  content_hash: string
+  status: string
+  generation_method: string | null
+  model_id: string | null
+}
+
+export interface LlmsTxtVersion extends LlmsTxtVersionSummary {
+  content: string
+}
+
+export interface SiteDetail {
+  site_id: string
+  root_url: string
+  created_at: string
+  updated_at: string
+  modified_at: string | null
+  current_version: LlmsTxtVersion | null
+  versions: LlmsTxtVersionSummary[]
 }
 
 async function errorMessage(response: Response, fallback: string): Promise<string> {
@@ -107,4 +133,29 @@ export async function getCrawlStatus(
     throw new Error(await errorMessage(response, 'Unable to load the crawl status.'))
   }
   return response.json() as Promise<CrawlStatusResponse>
+}
+
+export async function getSiteDetail(siteId: string): Promise<SiteDetail> {
+  const response = await authenticatedFetch(
+    `${apiUrl}/llms-txt/sites/${encodeURIComponent(siteId)}`,
+  )
+
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, 'Unable to load the website.'))
+  }
+  return response.json() as Promise<SiteDetail>
+}
+
+export async function getLlmsTxtVersion(
+  siteId: string,
+  versionId: string,
+): Promise<LlmsTxtVersion> {
+  const response = await authenticatedFetch(
+    `${apiUrl}/llms-txt/sites/${encodeURIComponent(siteId)}/versions/${encodeURIComponent(versionId)}`,
+  )
+
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, 'Unable to load this llms.txt version.'))
+  }
+  return response.json() as Promise<LlmsTxtVersion>
 }

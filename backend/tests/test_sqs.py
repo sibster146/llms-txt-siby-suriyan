@@ -9,9 +9,9 @@ from app.clients.sqs import SQSClient, SQSClientError
 class FakeSqsBotoClient:
     def __init__(self, response: dict[str, Any] | None = None) -> None:
         self.response = response or {"MessageId": "message-123"}
-        self.calls: list[dict[str, str]] = []
+        self.calls: list[dict[str, Any]] = []
 
-    def send_message(self, **kwargs: str) -> dict[str, Any]:
+    def send_message(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
         return self.response
 
@@ -41,3 +41,19 @@ def test_send_json_rejects_response_without_message_id() -> None:
         client.send_json({"action": "crawl_url"})
 
     assert error.value.code == "SQS_INVALID_RESPONSE"
+
+
+def test_send_json_supports_a_delivery_delay() -> None:
+    boto_client = FakeSqsBotoClient()
+    client = SQSClient(boto_client, "https://sqs.example/generator")
+
+    client.send_json({"action": "generate_llms_txt"}, delay_seconds=30)
+
+    assert boto_client.calls[0]["DelaySeconds"] == 30
+
+
+def test_send_json_rejects_an_invalid_delivery_delay() -> None:
+    client = SQSClient(FakeSqsBotoClient(), "queue-url")
+
+    with pytest.raises(ValueError):
+        client.send_json({"action": "generate_llms_txt"}, delay_seconds=901)

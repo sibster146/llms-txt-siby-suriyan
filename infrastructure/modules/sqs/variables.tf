@@ -43,6 +43,12 @@ variable "crawl_visibility_timeout_seconds" {
   default     = 30
 }
 
+variable "llm_txt_visibility_timeout_seconds" {
+  description = "How long a generator message remains hidden while Bedrock and persistence complete."
+  type        = number
+  default     = 1800
+}
+
 variable "max_receive_count" {
   description = "Number of failed parser receives before a message moves to its dead-letter queue."
   type        = number
@@ -51,6 +57,12 @@ variable "max_receive_count" {
 
 variable "crawl_max_receive_count" {
   description = "Total crawl delivery attempts before a message moves to its dead-letter queue."
+  type        = number
+  default     = 4
+}
+
+variable "llm_txt_max_receive_count" {
+  description = "Total generator delivery attempts before a message moves to its dead-letter queue."
   type        = number
   default     = 4
 }

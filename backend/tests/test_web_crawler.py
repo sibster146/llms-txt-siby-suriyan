@@ -6,6 +6,7 @@ from urllib.error import HTTPError
 import pytest
 
 from app.services.web_crawler import (
+    CrawlLeaseUnavailableError,
     CrawlMessageError,
     FetchedPage,
     PageNotFoundError,
@@ -32,8 +33,12 @@ class FakeCrawlPagesTable:
     def get_latest_crawled(self, **_: Any) -> dict[str, Any] | None:
         return self.previous
 
-    def mark_crawling(self, **kwargs: Any) -> None:
-        self.calls.append(("mark_crawling", kwargs))
+    def claim_crawling(self, **kwargs: Any) -> bool:
+        if self.existing is None or self.existing.get("status") == "CRAWLING":
+            return False
+        self.existing["status"] = "CRAWLING"
+        self.calls.append(("claim_crawling", kwargs))
+        return True
 
     def mark_crawled(self, **kwargs: Any) -> None:
         self.calls.append(("mark_crawled", kwargs))
@@ -178,7 +183,7 @@ def test_crawler_stores_html_and_queues_parsing() -> None:
     assert key.startswith("raw/site-1/crawl-1/")
     assert s3.objects[key].startswith(b"<html>")
     assert [name for name, _ in crawl_pages.calls] == [
-        "mark_crawling",
+        "claim_crawling",
         "mark_crawled",
         "mark_parse_pending",
     ]
@@ -257,7 +262,10 @@ def test_crawler_reuses_stored_html_when_queue_delivery_is_retried() -> None:
     _service(crawl_pages, s3, sqs).process_message(_message(), attempt=2)
 
     assert s3.objects == {}
-    assert [name for name, _ in crawl_pages.calls] == ["mark_parse_pending"]
+    assert [name for name, _ in crawl_pages.calls] == [
+        "claim_crawling",
+        "mark_parse_pending",
+    ]
     assert len(sqs.messages) == 1
     assert json.loads(sqs.messages[0]["MessageBody"])["payload"]["unchanged"] is True
 
@@ -275,6 +283,17 @@ def test_crawler_does_not_requeue_parsing_when_it_was_already_queued() -> None:
 
     assert crawl_pages.calls == []
     assert crawl_runs.calls == []
+
+
+def test_crawler_retries_when_another_delivery_owns_the_lease() -> None:
+    crawl_pages = FakeCrawlPagesTable(existing={"status": "CRAWLING"})
+    sqs = FakeSQSClient()
+
+    with pytest.raises(CrawlLeaseUnavailableError):
+        _service(crawl_pages, FakeS3Client(), sqs).process_message(_message())
+
+    assert crawl_pages.calls == []
+    assert sqs.messages == []
 
 
 def test_crawler_retries_generation_check_for_an_already_failed_page() -> None:

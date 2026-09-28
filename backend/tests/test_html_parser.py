@@ -7,6 +7,7 @@ import pytest
 from app.clients.sqs import SQSClientError
 from app.services.html_parser import (
     HtmlParserService,
+    ParseLeaseUnavailableError,
     ParseMessageError,
     _parse_document,
     discover_sitemap_urls,
@@ -238,7 +239,8 @@ def test_parser_does_not_count_a_page_when_another_delivery_claimed_it() -> None
     root = next(iter(pages.pages.values()))
     root["status"] = "PARSING"
 
-    service.process_message(_message())
+    with pytest.raises(ParseLeaseUnavailableError):
+        service.process_message(_message())
 
     assert pages.claims == 0
     assert s3.writes == []

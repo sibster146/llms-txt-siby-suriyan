@@ -89,6 +89,10 @@ class ParseMessageError(HtmlParserError):
     """Raised when a parser queue message does not match the contract."""
 
 
+class ParseLeaseUnavailableError(HtmlParserError):
+    """Raised when another parser invocation owns the page lease."""
+
+
 @dataclass(frozen=True)
 class ParseRequest:
     site_id: str
@@ -194,11 +198,11 @@ class HtmlParserService:
         claimed = self.crawl_pages.claim_parsing(
             crawl_run_id=request.crawl_run_id,
             canonical_url_hash=request.canonical_url_hash,
-            started_at=started_at.isoformat(),
-            stale_before=(started_at - timedelta(seconds=PARSING_LEASE_SECONDS)).isoformat(),
+            claimed_at=started_at.isoformat(),
+            lease_expires_at=(started_at + timedelta(seconds=PARSING_LEASE_SECONDS)).isoformat(),
         )
         if not claimed:
-            return
+            raise ParseLeaseUnavailableError("Another parser invocation owns this page")
 
         try:
             raw_html = self.s3.get_bytes(request.raw_html_s3_key)

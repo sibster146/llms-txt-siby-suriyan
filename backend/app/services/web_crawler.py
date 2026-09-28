@@ -6,7 +6,7 @@ import re
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -34,6 +34,7 @@ ACTIVE_PAGE_STATUSES = {
     "PARSE_PENDING",
     "PARSING",
 }
+CRAWLING_LEASE_SECONDS = 30
 
 
 class WebCrawlerError(Exception):
@@ -42,6 +43,10 @@ class WebCrawlerError(Exception):
 
 class CrawlMessageError(WebCrawlerError):
     """Raised when an SQS message does not match the crawl contract."""
+
+
+class CrawlLeaseUnavailableError(WebCrawlerError):
+    """Raised when another crawler invocation owns the page lease."""
 
 
 class UnsafeUrlError(WebCrawlerError):
@@ -157,20 +162,32 @@ class WebCrawlerService:
     def process_message(self, message: dict[str, Any], attempt: int = 1) -> None:
         request = CrawlRequest.from_message(message)
 
-        try:
-            existing_page = self.crawl_pages.get(
-                crawl_run_id=request.crawl_run_id,
-                canonical_url_hash=request.canonical_url_hash,
-            )
-            existing_status = (existing_page or {}).get("status")
-            if existing_status == "PARSE_PENDING":
-                return
-            if existing_status == "FAILED":
-                self._publish_generation_if_complete(request)
-                return
-            if existing_status in {"COMPLETED", "PARSED"}:
-                return
+        existing_page = self.crawl_pages.get(
+            crawl_run_id=request.crawl_run_id,
+            canonical_url_hash=request.canonical_url_hash,
+        )
+        if existing_page is None:
+            raise WebCrawlerError("CrawlPages record does not exist")
+        existing_status = existing_page.get("status")
+        if existing_status == "PARSE_PENDING":
+            return
+        if existing_status == "FAILED":
+            self._publish_generation_if_complete(request)
+            return
+        if existing_status in {"COMPLETED", "PARSED"}:
+            return
 
+        started_at = datetime.now(UTC)
+        claimed = self.crawl_pages.claim_crawling(
+            crawl_run_id=request.crawl_run_id,
+            canonical_url_hash=request.canonical_url_hash,
+            claimed_at=started_at.isoformat(),
+            lease_expires_at=(started_at + timedelta(seconds=CRAWLING_LEASE_SECONDS)).isoformat(),
+        )
+        if not claimed:
+            raise CrawlLeaseUnavailableError("Another crawler invocation owns this page")
+
+        try:
             self.crawl_runs.update_status(
                 site_id=request.site_id,
                 crawl_run_id=request.crawl_run_id,
@@ -221,11 +238,6 @@ class WebCrawlerService:
             raise
 
     def _fetch_and_store(self, request: CrawlRequest) -> tuple[str, str, bool]:
-        self.crawl_pages.mark_crawling(
-            crawl_run_id=request.crawl_run_id,
-            canonical_url_hash=request.canonical_url_hash,
-            updated_at=_utc_now(),
-        )
         if not self.robots_checker(
             request.url,
             self.user_agent,

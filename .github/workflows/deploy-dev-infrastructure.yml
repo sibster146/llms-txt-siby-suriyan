@@ -29,6 +29,14 @@ jobs:
       TF_VAR_parser_max_links_per_page: ${{ vars.PARSER_MAX_LINKS_PER_PAGE || '100' }}
       TF_VAR_parser_maximum_concurrency: ${{ vars.PARSER_MAXIMUM_CONCURRENCY || '25' }}
       TF_VAR_parser_memory_size: ${{ vars.PARSER_MEMORY_SIZE || '2048' }}
+      TF_VAR_generator_model_id: ${{ vars.GENERATOR_MODEL_ID || 'amazon.nova-pro-v1:0' }}
+      TF_VAR_generator_max_input_pages: ${{ vars.GENERATOR_MAX_INPUT_PAGES || '500' }}
+      TF_VAR_generator_max_output_links: ${{ vars.GENERATOR_MAX_OUTPUT_LINKS || '200' }}
+      TF_VAR_generator_max_excerpt_chars: ${{ vars.GENERATOR_MAX_EXCERPT_CHARS || '1000' }}
+      TF_VAR_generator_max_model_tokens: ${{ vars.GENERATOR_MAX_MODEL_TOKENS || '8000' }}
+      TF_VAR_generator_maximum_concurrency: ${{ vars.GENERATOR_MAXIMUM_CONCURRENCY || '2' }}
+      TF_VAR_generator_memory_size: ${{ vars.GENERATOR_MEMORY_SIZE || '1024' }}
+      TF_VAR_generator_timeout_seconds: ${{ vars.GENERATOR_TIMEOUT_SECONDS || '300' }}
       TF_IN_AUTOMATION: true
       TF_INPUT: false
     steps:
@@ -56,9 +64,11 @@ jobs:
           bucket="dev-llms-txt-${account_id}-terraform-state"
           crawler_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_web_crawler"
           parser_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_html_parser"
+          generator_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_generator"
           echo "bucket=${bucket}" >> "${GITHUB_OUTPUT}"
           echo "TF_VAR_web_crawler_image_uri=${crawler_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_html_parser_image_uri=${parser_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_llms_txt_generator_image_uri=${generator_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
 
       - name: Prepare remote state
         env:
@@ -86,6 +96,7 @@ jobs:
           terraform -chdir=infrastructure/dev plan \
             -target=module.web_crawler_ecr \
             -target=module.html_parser_ecr \
+            -target=module.llms_txt_generator_ecr \
             -out=ecr.tfplan
           terraform -chdir=infrastructure/dev apply -auto-approve ecr.tfplan
 
@@ -102,6 +113,13 @@ jobs:
           repository=$(terraform -chdir=infrastructure/dev output -raw html_parser_ecr_repository_url)
           echo "HTML_PARSER_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_html_parser_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Resolve llms.txt generator image URI
+        shell: bash
+        run: |
+          repository=$(terraform -chdir=infrastructure/dev output -raw llms_txt_generator_ecr_repository_url)
+          echo "LLMS_TXT_GENERATOR_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_llms_txt_generator_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
 
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -128,6 +146,17 @@ jobs:
       - name: Push HTML parser image
         run: docker push "${HTML_PARSER_IMAGE_URI}"
 
+      - name: Build llms.txt generator image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --file deployables/dev/lambdas/llms_txt_generator/Dockerfile \
+            --tag "${LLMS_TXT_GENERATOR_IMAGE_URI}" \
+            .
+
+      - name: Push llms.txt generator image
+        run: docker push "${LLMS_TXT_GENERATOR_IMAGE_URI}"
+
       - name: Plan development infrastructure
         run: terraform -chdir=infrastructure/dev plan -out=tfplan
 
@@ -145,3 +174,6 @@ jobs:
           echo "## HTML parser" >> "${GITHUB_STEP_SUMMARY}"
           echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw html_parser_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Image: ${HTML_PARSER_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## llms.txt generator" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw llms_txt_generator_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Image: ${LLMS_TXT_GENERATOR_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
