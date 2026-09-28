@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import gzip
+import io
 import json
 import posixpath
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import trafilatura
-from lxml import html
+from lxml import etree, html
 from markdown_it import MarkdownIt
 
 from app.clients.s3 import S3Client
 from app.clients.sqs import SQSClient, SQSClientError
+from app.services.web_crawler import validate_public_url
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 
@@ -69,6 +75,10 @@ ACTIVE_PAGE_STATUSES = {
 PARSING_LEASE_SECONDS = 120
 HTML_CONTENT_TYPES = {"application/xhtml+xml", "text/html"}
 MARKDOWN_CONTENT_TYPES = {"text/markdown", "text/x-markdown"}
+SITEMAP_MAX_BYTES = 2_000_000
+SITEMAP_MAX_DOCUMENTS = 10
+SITEMAP_TIMEOUT_SECONDS = 3
+SITEMAP_USER_AGENT = "llms-txt-crawler/1.0"
 
 
 class HtmlParserError(Exception):
@@ -83,6 +93,7 @@ class ParseMessageError(HtmlParserError):
 class ParseRequest:
     site_id: str
     crawl_run_id: str
+    root_url: str
     url: str
     final_url: str
     canonical_url_hash: str
@@ -101,6 +112,7 @@ class ParseRequest:
         request = cls(
             site_id=_required_string(payload, "site_id"),
             crawl_run_id=_required_string(payload, "crawl_run_id"),
+            root_url=_required_string(payload, "root_url"),
             url=_required_string(payload, "url"),
             final_url=_required_string(payload, "final_url"),
             canonical_url_hash=_required_string(payload, "canonical_url_hash"),
@@ -112,7 +124,18 @@ class ParseRequest:
             raise ParseMessageError("canonical_url_hash must be a lowercase SHA-256 hash")
         if sha256(request.url.encode()).hexdigest() != request.canonical_url_hash:
             raise ParseMessageError("canonical_url_hash does not match the URL")
+        if request.depth > 0 and not is_url_within_root(
+            request.url,
+            request.root_url,
+            include_root=True,
+        ):
+            raise ParseMessageError("url is outside the root URL hierarchy")
+        if not is_url_within_root(request.final_url, request.root_url, include_root=True):
+            raise ParseMessageError("final_url is outside the root URL hierarchy")
         return request
+
+
+SitemapDiscoverer = Callable[[str, int], list[str]]
 
 
 class HtmlParserService:
@@ -130,6 +153,7 @@ class HtmlParserService:
         max_depth: int,
         max_links_per_page: int,
         max_attempts: int,
+        sitemap_discoverer: SitemapDiscoverer | None = None,
     ) -> None:
         self.crawl_pages = crawl_pages
         self.crawl_runs = crawl_runs
@@ -140,6 +164,7 @@ class HtmlParserService:
         self.max_depth = max_depth
         self.max_links_per_page = max_links_per_page
         self.max_attempts = max_attempts
+        self.sitemap_discoverer = sitemap_discoverer or discover_sitemap_urls
 
     def process_message(self, message: dict[str, Any], attempt: int = 1) -> None:
         request = ParseRequest.from_message(message)
@@ -182,7 +207,7 @@ class HtmlParserService:
                 document = _parse_document(raw_html, request.final_url)
                 child_urls = extract_child_urls(
                     document,
-                    request_url=request.url,
+                    root_url=request.root_url,
                     final_url=request.final_url,
                     depth=request.depth,
                     max_depth=self.max_depth,
@@ -192,7 +217,7 @@ class HtmlParserService:
                 document = None
                 child_urls = extract_markdown_child_urls(
                     raw_html,
-                    request_url=request.url,
+                    root_url=request.root_url,
                     final_url=request.final_url,
                     depth=request.depth,
                     max_depth=self.max_depth,
@@ -200,6 +225,16 @@ class HtmlParserService:
                 )
             else:
                 raise HtmlParserError(f"Unsupported parser content type '{content_type}'")
+            if request.depth == 0 and request.depth < self.max_depth:
+                sitemap_urls = self.sitemap_discoverer(
+                    request.root_url,
+                    self.max_links_per_page,
+                )
+                child_urls = _merge_discovered_urls(
+                    sitemap_urls,
+                    child_urls,
+                    self.max_links_per_page,
+                )
             parsed_key = self._parsed_content_key(
                 request.site_id,
                 request.canonical_url_hash,
@@ -301,6 +336,7 @@ class HtmlParserService:
                     "payload": {
                         "site_id": request.site_id,
                         "crawl_run_id": request.crawl_run_id,
+                        "root_url": request.root_url,
                         "url": child_url,
                         "canonical_url_hash": child_hash,
                         "depth": request.depth + 1,
@@ -353,7 +389,7 @@ class HtmlParserService:
 def extract_child_urls(
     document: Any,
     *,
-    request_url: str,
+    root_url: str,
     final_url: str,
     depth: int,
     max_depth: int,
@@ -362,16 +398,11 @@ def extract_child_urls(
     if depth >= max_depth:
         return []
 
-    allowed_hosts = {
-        host
-        for value in (request_url, final_url)
-        if (host := (urlsplit(value).hostname or "").lower())
-    }
     base_url = final_url
     base_nodes = document.xpath("//base[@href][1]/@href")
     if base_nodes:
         candidate_base = urljoin(final_url, str(base_nodes[0]))
-        if (urlsplit(candidate_base).hostname or "").lower() in allowed_hosts:
+        if is_url_within_root(candidate_base, root_url, include_root=True):
             base_url = candidate_base
 
     child_urls: set[str] = set()
@@ -382,7 +413,7 @@ def extract_child_urls(
         canonical_url = canonicalize_discovered_url(urljoin(base_url, str(anchor.get("href", ""))))
         if canonical_url is None:
             continue
-        if (urlsplit(canonical_url).hostname or "").lower() not in allowed_hosts:
+        if not is_url_within_root(canonical_url, root_url):
             continue
         child_urls.add(canonical_url)
         if len(child_urls) >= max_links:
@@ -393,7 +424,7 @@ def extract_child_urls(
 def extract_markdown_child_urls(
     raw_markdown: bytes,
     *,
-    request_url: str,
+    root_url: str,
     final_url: str,
     depth: int,
     max_depth: int,
@@ -402,11 +433,6 @@ def extract_markdown_child_urls(
     if depth >= max_depth:
         return []
 
-    allowed_hosts = {
-        host
-        for value in (request_url, final_url)
-        if (host := (urlsplit(value).hostname or "").lower())
-    }
     markdown_text = raw_markdown.decode("utf-8", errors="replace")
     child_urls: set[str] = set()
     for token in MarkdownIt("commonmark").parse(markdown_text):
@@ -417,7 +443,7 @@ def extract_markdown_child_urls(
             canonical_url = canonicalize_discovered_url(urljoin(final_url, href or ""))
             if canonical_url is None:
                 continue
-            if (urlsplit(canonical_url).hostname or "").lower() not in allowed_hosts:
+            if not is_url_within_root(canonical_url, root_url):
                 continue
             child_urls.add(canonical_url)
             if len(child_urls) >= max_links:
@@ -425,17 +451,141 @@ def extract_markdown_child_urls(
     return sorted(child_urls)
 
 
-def canonicalize_discovered_url(url: str) -> str | None:
+def is_url_within_root(candidate_url: str, root_url: str, *, include_root: bool = False) -> bool:
+    """Return whether a URL is on the same origin and below the root path."""
+    try:
+        candidate = urlsplit(candidate_url)
+        root = urlsplit(root_url)
+        candidate_port = candidate.port or (443 if candidate.scheme.lower() == "https" else 80)
+        root_port = root.port or (443 if root.scheme.lower() == "https" else 80)
+    except ValueError:
+        return False
+    if (
+        candidate.scheme.lower() != root.scheme.lower()
+        or (candidate.hostname or "").lower() != (root.hostname or "").lower()
+        or candidate_port != root_port
+    ):
+        return False
+
+    root_path = (root.path or "/").rstrip("/") or "/"
+    candidate_path = (candidate.path or "/").rstrip("/") or "/"
+    if candidate_path == root_path:
+        return include_root
+    if root_path == "/":
+        return candidate_path.startswith("/")
+    return candidate_path.startswith(f"{root_path}/")
+
+
+def discover_sitemap_urls(root_url: str, max_urls: int) -> list[str]:
+    """Discover in-scope URLs from robots.txt and bounded sitemap traversal."""
+    if max_urls <= 0:
+        return []
+    root = urlsplit(root_url)
+    origin = urlunsplit((root.scheme, root.netloc, "", "", ""))
+    sitemap_urls = [urljoin(origin, "/sitemap.xml")]
+    robots_text = _fetch_discovery_resource(urljoin(origin, "/robots.txt"), text=True)
+    if isinstance(robots_text, str):
+        for line in robots_text.splitlines():
+            name, separator, value = line.partition(":")
+            if separator and name.strip().lower() == "sitemap":
+                sitemap_url = urljoin(origin, value.strip())
+                if _same_origin(sitemap_url, root_url):
+                    sitemap_urls.append(sitemap_url)
+
+    discovered: list[str] = []
+    seen_pages: set[str] = set()
+    seen_sitemaps: set[str] = set()
+    pending_sitemaps = list(dict.fromkeys(sitemap_urls))
+    while pending_sitemaps and len(seen_sitemaps) < SITEMAP_MAX_DOCUMENTS:
+        sitemap_url = pending_sitemaps.pop(0)
+        if sitemap_url in seen_sitemaps or not _same_origin(sitemap_url, root_url):
+            continue
+        seen_sitemaps.add(sitemap_url)
+        payload = _fetch_discovery_resource(sitemap_url)
+        if not isinstance(payload, bytes):
+            continue
+        for location, is_index in _parse_sitemap(payload, sitemap_url):
+            if is_index:
+                normalized_sitemap_url = _normalize_http_url(location)
+                if normalized_sitemap_url and _same_origin(normalized_sitemap_url, root_url):
+                    pending_sitemaps.append(normalized_sitemap_url)
+                continue
+            canonical_url = canonicalize_discovered_url(location)
+            if canonical_url is None:
+                continue
+            if canonical_url in seen_pages or not is_url_within_root(canonical_url, root_url):
+                continue
+            seen_pages.add(canonical_url)
+            discovered.append(canonical_url)
+            if len(discovered) >= max_urls:
+                return discovered
+    return discovered
+
+
+class _DiscoveryRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Request | None:
+        redirect_url = urljoin(req.full_url, newurl)
+        validate_public_url(redirect_url)
+        return super().redirect_request(req, fp, code, msg, headers, redirect_url)
+
+
+def _fetch_discovery_resource(url: str, *, text: bool = False) -> bytes | str | None:
+    try:
+        validate_public_url(url)
+        request = Request(url, headers={"User-Agent": SITEMAP_USER_AGENT})
+        with build_opener(_DiscoveryRedirectHandler()).open(
+            request,
+            timeout=SITEMAP_TIMEOUT_SECONDS,
+        ) as response:
+            payload = response.read(SITEMAP_MAX_BYTES + 1)
+            if len(payload) > SITEMAP_MAX_BYTES:
+                return None
+            content_encoding = str(response.headers.get("Content-Encoding", "")).lower()
+            if content_encoding == "gzip" or urlsplit(url).path.lower().endswith(".gz"):
+                with gzip.GzipFile(fileobj=io.BytesIO(payload)) as compressed:
+                    payload = compressed.read(SITEMAP_MAX_BYTES + 1)
+                if len(payload) > SITEMAP_MAX_BYTES:
+                    return None
+            return payload.decode("utf-8", errors="replace") if text else payload
+    except (HTTPError, URLError, OSError, ValueError):
+        return None
+
+
+def _parse_sitemap(payload: bytes, sitemap_url: str) -> list[tuple[str, bool]]:
+    try:
+        parser = etree.XMLParser(resolve_entities=False, no_network=True, recover=False)
+        root = etree.fromstring(payload, parser=parser)
+    except (etree.XMLSyntaxError, ValueError):
+        return []
+    root_name = etree.QName(root).localname.lower()
+    if root_name not in {"urlset", "sitemapindex"}:
+        return []
+    is_index = root_name == "sitemapindex"
+    locations = root.xpath("//*[local-name()='loc']/text()")
+    return [(urljoin(sitemap_url, str(location).strip()), is_index) for location in locations]
+
+
+def _same_origin(first_url: str, second_url: str) -> bool:
+    second = urlsplit(second_url)
+    origin = urlunsplit((second.scheme, second.netloc, "/", "", ""))
+    return is_url_within_root(first_url, origin, include_root=True)
+
+
+def _normalize_http_url(url: str) -> str | None:
     try:
         parsed = urlsplit(url)
         port = parsed.port
     except ValueError:
         return None
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-        return None
-    path = parsed.path or "/"
-    suffix = posixpath.splitext(path.lower())[1]
-    if suffix in SKIPPED_EXTENSIONS:
         return None
     default_port = (parsed.scheme.lower() == "http" and port == 80) or (
         parsed.scheme.lower() == "https" and port == 443
@@ -445,7 +595,32 @@ def canonicalize_discovered_url(url: str) -> str | None:
         if port is None or default_port
         else f"{parsed.hostname.lower()}:{port}"
     )
-    return urlunsplit((parsed.scheme.lower(), netloc, path, parsed.query, ""))
+    return urlunsplit((parsed.scheme.lower(), netloc, parsed.path or "/", parsed.query, ""))
+
+
+def _merge_discovered_urls(primary: list[str], secondary: list[str], limit: int) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for url in [*primary, *secondary]:
+        if url in seen:
+            continue
+        seen.add(url)
+        merged.append(url)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def canonicalize_discovered_url(url: str) -> str | None:
+    normalized_url = _normalize_http_url(url)
+    if normalized_url is None:
+        return None
+    parsed = urlsplit(normalized_url)
+    path = parsed.path or "/"
+    suffix = posixpath.splitext(path.lower())[1]
+    if suffix in SKIPPED_EXTENSIONS:
+        return None
+    return normalized_url
 
 
 def extract_page_content(

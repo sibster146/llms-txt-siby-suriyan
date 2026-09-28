@@ -139,6 +139,7 @@ def create_llms_txt(
                 "payload": {
                     "site_id": site_id,
                     "crawl_run_id": crawl_run_id,
+                    "root_url": canonical_url,
                     "url": canonical_url,
                     "canonical_url_hash": canonical_url_hash,
                     "depth": 0,

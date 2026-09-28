@@ -68,6 +68,7 @@ class PageNotFoundError(WebCrawlerError):
 class CrawlRequest:
     site_id: str
     crawl_run_id: str
+    root_url: str
     url: str
     canonical_url_hash: str
     depth: int
@@ -82,6 +83,7 @@ class CrawlRequest:
 
         site_id = _required_string(payload, "site_id")
         crawl_run_id = _required_string(payload, "crawl_run_id")
+        root_url = _required_string(payload, "root_url")
         url = _required_string(payload, "url")
         canonical_url_hash = _required_string(payload, "canonical_url_hash")
         depth = payload.get("depth")
@@ -92,10 +94,12 @@ class CrawlRequest:
         if sha256(url.encode()).hexdigest() != canonical_url_hash:
             raise CrawlMessageError("canonical_url_hash does not match the URL")
         _validate_url_shape(url)
+        _validate_url_shape(root_url)
 
         return cls(
             site_id=site_id,
             crawl_run_id=crawl_run_id,
+            root_url=root_url,
             url=url,
             canonical_url_hash=canonical_url_hash,
             depth=depth,
@@ -300,6 +304,7 @@ class WebCrawlerService:
             "payload": {
                 "site_id": request.site_id,
                 "crawl_run_id": request.crawl_run_id,
+                "root_url": final_url if request.depth == 0 else request.root_url,
                 "url": request.url,
                 "final_url": final_url,
                 "canonical_url_hash": request.canonical_url_hash,

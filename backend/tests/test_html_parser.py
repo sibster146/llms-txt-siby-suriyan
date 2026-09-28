@@ -9,7 +9,9 @@ from app.services.html_parser import (
     HtmlParserService,
     ParseMessageError,
     _parse_document,
+    discover_sitemap_urls,
     extract_child_urls,
+    is_url_within_root,
 )
 
 
@@ -130,6 +132,7 @@ def _message(*, unchanged: bool = False) -> dict[str, Any]:
         "payload": {
             "site_id": "site-1",
             "crawl_run_id": "crawl-1",
+            "root_url": url,
             "url": url,
             "final_url": url,
             "canonical_url_hash": sha256(url.encode()).hexdigest(),
@@ -146,6 +149,7 @@ def _service(
     unchanged: bool = False,
     existing_parsed: bool = False,
     content_type: str = "text/html",
+    sitemap_urls: list[str] | None = None,
 ) -> tuple[HtmlParserService, FakeCrawlPagesTable, FakeS3Client, FakeQueue, FakeQueue]:
     message = _message(unchanged=unchanged)
     payload = message["payload"]
@@ -178,6 +182,7 @@ def _service(
             max_depth=3,
             max_links_per_page=20,
             max_attempts=5,
+            sitemap_discoverer=lambda *_: sitemap_urls or [],
         ),
         pages,
         s3,
@@ -298,7 +303,7 @@ def test_link_discovery_stops_at_the_configured_depth() -> None:
     assert (
         extract_child_urls(
             document,
-            request_url="https://example.com/",
+            root_url="https://example.com/",
             final_url="https://example.com/",
             depth=3,
             max_depth=3,
@@ -306,6 +311,94 @@ def test_link_discovery_stops_at_the_configured_depth() -> None:
         )
         == []
     )
+
+
+def test_link_discovery_only_returns_urls_below_root_path() -> None:
+    document = _parse_document(
+        b"""
+        <html><body>
+        <a href='/docs/guide'>Guide</a>
+        <a href='/docs/api/users'>API</a>
+        <a href='/docs-old/archive'>Similar prefix</a>
+        <a href='/pricing'>Pricing</a>
+        </body></html>
+        """,
+        "https://example.com/docs/",
+    )
+
+    assert extract_child_urls(
+        document,
+        root_url="https://example.com/docs/",
+        final_url="https://example.com/docs/",
+        depth=0,
+        max_depth=3,
+        max_links=10,
+    ) == [
+        "https://example.com/docs/api/users",
+        "https://example.com/docs/guide",
+    ]
+
+
+def test_root_parser_seeds_in_scope_sitemap_urls_before_page_links() -> None:
+    raw_html = b"<html><body><a href='/from-page'>Page link</a></body></html>"
+    service, _, _, crawl_queue, _ = _service(
+        raw_html,
+        sitemap_urls=["https://example.com/from-sitemap"],
+    )
+
+    service.process_message(_message())
+
+    assert [message["payload"]["url"] for message in crawl_queue.messages] == [
+        "https://example.com/from-sitemap",
+        "https://example.com/from-page",
+    ]
+    assert all(
+        message["payload"]["root_url"] == "https://example.com/" for message in crawl_queue.messages
+    )
+
+
+def test_sitemap_discovery_follows_indexes_and_filters_to_root_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resources: dict[str, bytes | str | None] = {
+        "https://example.com/robots.txt": "Sitemap: /sitemap-index.xml\n",
+        "https://example.com/sitemap.xml": None,
+        "https://example.com/sitemap-index.xml": b"""
+            <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <sitemap><loc>https://example.com/docs-sitemap.xml</loc></sitemap>
+            </sitemapindex>
+        """,
+        "https://example.com/docs-sitemap.xml": b"""
+            <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <url><loc>https://example.com/docs/guide</loc></url>
+              <url><loc>https://example.com/pricing</loc></url>
+              <url><loc>https://outside.example/docs/other</loc></url>
+            </urlset>
+        """,
+    }
+    monkeypatch.setattr(
+        "app.services.html_parser._fetch_discovery_resource",
+        lambda url, **_: resources.get(url),
+    )
+
+    assert discover_sitemap_urls("https://example.com/docs/", 10) == [
+        "https://example.com/docs/guide"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    [
+        ("https://example.com/docs/guide", True),
+        ("https://example.com/docs/api/users", True),
+        ("https://example.com/docs", False),
+        ("https://example.com/docs-old", False),
+        ("https://example.com/pricing", False),
+        ("https://other.example/docs/guide", False),
+    ],
+)
+def test_url_hierarchy(candidate: str, expected: bool) -> None:
+    assert is_url_within_root(candidate, "https://example.com/docs/") is expected
 
 
 def test_parser_rejects_a_mismatched_url_hash() -> None:

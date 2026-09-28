@@ -112,6 +112,7 @@ def _message(url: str = "https://example.com/") -> dict[str, Any]:
         "payload": {
             "site_id": "site-1",
             "crawl_run_id": "crawl-1",
+            "root_url": url,
             "url": url,
             "canonical_url_hash": sha256(url.encode()).hexdigest(),
             "depth": 0,
@@ -186,6 +187,7 @@ def test_crawler_stores_html_and_queues_parsing() -> None:
     assert queued["action"] == "parse_page"
     assert queued["payload"]["raw_html_s3_key"] == key
     assert queued["payload"]["unchanged"] is False
+    assert queued["payload"]["root_url"] == "https://example.com/"
     assert crawl_pages.calls[1][1]["raw_html_hash"] == sha256(s3.objects[key]).hexdigest()
     assert crawl_pages.calls[1][1]["html_unchanged"] is False
     assert sites.calls[0]["crawl_run_id"] == "crawl-1"

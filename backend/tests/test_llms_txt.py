@@ -139,6 +139,7 @@ def test_create_llms_txt_persists_site_mapping_and_crawl() -> None:
             "payload": {
                 "site_id": body["site_id"],
                 "crawl_run_id": body["crawl_run_id"],
+                "root_url": "https://example.com/docs",
                 "url": "https://example.com/docs",
                 "canonical_url_hash": body["site_id"].removeprefix("site_"),
                 "depth": 0,
