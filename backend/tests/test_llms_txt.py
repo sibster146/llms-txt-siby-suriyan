@@ -262,7 +262,7 @@ def test_get_crawl_status_returns_owned_crawl() -> None:
         item={
             "site_id": "site-1",
             "crawl_run_id": "crawl-1",
-            "status": "WORKING",
+            "status": "CRAWLING_AND_PARSING",
             "pending_page_count": 2,
             "discovered_page_count": 4,
             "completed_page_count": 1,
@@ -277,7 +277,7 @@ def test_get_crawl_status_returns_owned_crawl() -> None:
         response = client.get("/llms-txt/site-1/crawls/crawl-1")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "WORKING"
+    assert response.json()["status"] == "CRAWLING_AND_PARSING"
     assert response.json()["discovered_page_count"] == 4
     assert user_sites.calls[0]["user_id"] == "user-123"
 
@@ -332,7 +332,7 @@ def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
             "site-1": {
                 "site_id": "site-1",
                 "crawl_run_id": "crawl-current-1",
-                "status": "WORKING",
+                "status": "CRAWLING_AND_PARSING",
                 "pending_page_count": 2,
                 "discovered_page_count": 3,
                 "completed_page_count": 1,
@@ -360,7 +360,7 @@ def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
     assert [site["site_id"] for site in response.json()] == ["site-1", "site-2"]
     assert response.json()[0]["modified_at"] == "2026-09-27T13:00:00+00:00"
     assert response.json()[0]["latest_crawl"]["crawl_run_id"] == "crawl-current-1"
-    assert response.json()[0]["latest_crawl"]["status"] == "WORKING"
+    assert response.json()[0]["latest_crawl"]["status"] == "CRAWLING_AND_PARSING"
     assert response.json()[1]["latest_crawl"]["status"] == "COMPLETED"
     assert user_sites.calls[0] == {
         "operation": "list_for_user",

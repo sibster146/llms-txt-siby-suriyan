@@ -77,30 +77,6 @@ class CrawlRunsTable:
             },
         )
 
-    def mark_crawled(
-        self,
-        *,
-        site_id: str,
-        crawl_run_id: str,
-        updated_at: str,
-    ) -> None:
-        try:
-            self.dynamodb.update_item(
-                key={"site_id": site_id, "crawl_run_id": crawl_run_id},
-                update_expression="SET #status = :status, updated_at = :updated_at",
-                expression_attribute_names={"#status": "status"},
-                expression_attribute_values={
-                    ":status": "CRAWLED",
-                    ":updated_at": updated_at,
-                },
-                condition_expression=(
-                    Attr("status").not_exists()
-                    | (Attr("status").ne("GENERATION_QUEUED") & Attr("status").ne("COMPLETED"))
-                ),
-            )
-        except DynamoDBConditionNotMetError:
-            return
-
     def claim_generation(
         self,
         *,
@@ -114,13 +90,13 @@ class CrawlRunsTable:
                 update_expression="SET #status = :status, updated_at = :updated_at",
                 expression_attribute_names={"#status": "status"},
                 expression_attribute_values={
-                    ":status": "GENERATION_QUEUED",
+                    ":status": "GENERATING",
                     ":updated_at": updated_at,
                 },
                 condition_expression=(
                     (
                         Attr("status").not_exists()
-                        | (Attr("status").ne("GENERATION_QUEUED") & Attr("status").ne("COMPLETED"))
+                        | (Attr("status").ne("GENERATING") & Attr("status").ne("COMPLETED"))
                     )
                     & Attr("pending_page_count").eq(0)
                 ),
@@ -142,65 +118,7 @@ class CrawlRunsTable:
                 update_expression="SET #status = :status, updated_at = :updated_at",
                 expression_attribute_names={"#status": "status"},
                 expression_attribute_values={
-                    ":status": "WORKING",
-                    ":updated_at": updated_at,
-                },
-                condition_expression=Attr("status").eq("GENERATION_QUEUED"),
-            )
-        except DynamoDBConditionNotMetError:
-            return
-
-    def claim_generation_work(
-        self,
-        *,
-        site_id: str,
-        crawl_run_id: str,
-        claimed_at: str,
-        lease_expires_at: str,
-    ) -> bool:
-        try:
-            self.dynamodb.update_item(
-                key={"site_id": site_id, "crawl_run_id": crawl_run_id},
-                update_expression=(
-                    "SET #status = :generating, generation_started_at = :claimed_at, "
-                    "generation_lease_expires_at = :lease_expires_at, "
-                    "updated_at = :claimed_at"
-                ),
-                expression_attribute_names={"#status": "status"},
-                expression_attribute_values={
-                    ":generating": "GENERATING",
-                    ":claimed_at": claimed_at,
-                    ":lease_expires_at": lease_expires_at,
-                },
-                condition_expression=(
-                    Attr("status").eq("GENERATION_QUEUED")
-                    | (
-                        Attr("status").eq("GENERATING")
-                        & (
-                            Attr("generation_lease_expires_at").not_exists()
-                            | Attr("generation_lease_expires_at").lt(claimed_at)
-                        )
-                    )
-                ),
-            )
-        except DynamoDBConditionNotMetError:
-            return False
-        return True
-
-    def release_generation_work(
-        self,
-        *,
-        site_id: str,
-        crawl_run_id: str,
-        updated_at: str,
-    ) -> None:
-        try:
-            self.dynamodb.update_item(
-                key={"site_id": site_id, "crawl_run_id": crawl_run_id},
-                update_expression="SET #status = :queued, updated_at = :updated_at",
-                expression_attribute_names={"#status": "status"},
-                expression_attribute_values={
-                    ":queued": "GENERATION_QUEUED",
+                    ":status": "CRAWLING_AND_PARSING",
                     ":updated_at": updated_at,
                 },
                 condition_expression=Attr("status").eq("GENERATING"),

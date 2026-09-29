@@ -8,9 +8,7 @@ interface ApiError {
 
 export type CrawlStatus =
   | 'PENDING'
-  | 'WORKING'
-  | 'CRAWLED'
-  | 'GENERATION_QUEUED'
+  | 'CRAWLING_AND_PARSING'
   | 'GENERATING'
   | 'COMPLETED'
   | 'FAILED'

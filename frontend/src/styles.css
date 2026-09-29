@@ -586,20 +586,13 @@ input:focus-visible {
   background: #fff8df;
 }
 
-.status-working {
-  border-color: #b9cee4;
-  color: #285777;
-  background: #eef6fc;
-}
-
-.status-generation_queued,
+.status-crawling_and_parsing,
 .status-generating {
   border-color: #b9cee4;
   color: #285777;
   background: #eef6fc;
 }
 
-.status-crawled,
 .status-completed {
   border-color: #bcdcc8;
   color: #23623e;

@@ -7,7 +7,6 @@ import pytest
 from app.clients.sqs import SQSClientError
 from app.services.html_parser import (
     HtmlParserService,
-    ParseLeaseUnavailableError,
     ParseMessageError,
     _parse_document,
     discover_sitemap_urls,
@@ -177,6 +176,7 @@ def _service(
         objects[parsed_key] = b'{"existing":true}'
     pages = FakeCrawlPagesTable(
         {
+            "site_id": "site-1",
             "crawl_run_id": "crawl-1",
             "canonical_url_hash": payload["canonical_url_hash"],
             "status": "PARSE_PENDING",
@@ -239,8 +239,7 @@ def test_parser_does_not_count_a_page_when_another_delivery_claimed_it() -> None
     root = next(iter(pages.pages.values()))
     root["status"] = "PARSING"
 
-    with pytest.raises(ParseLeaseUnavailableError):
-        service.process_message(_message())
+    service.process_message(_message())
 
     assert pages.claims == 0
     assert s3.writes == []

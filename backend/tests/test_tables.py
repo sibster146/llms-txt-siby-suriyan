@@ -151,23 +151,6 @@ def test_crawl_pages_table_claims_parsing_atomically() -> None:
     assert dynamodb.updates[0]["condition_expression"] is not None
 
 
-def test_crawl_pages_table_claims_crawling_with_an_expiring_lease() -> None:
-    dynamodb = RecordingDynamoDBClient()
-
-    claimed = CrawlPagesTable(dynamodb).claim_crawling(
-        crawl_run_id="crawl-1",
-        canonical_url_hash="hash-1",
-        claimed_at="2026-09-27T22:00:00+00:00",
-        lease_expires_at="2026-09-27T22:00:30+00:00",
-    )
-
-    assert claimed
-    values = dynamodb.updates[0]["expression_attribute_values"]
-    assert values[":crawling"] == "CRAWLING"
-    assert values[":lease_expires_at"] == "2026-09-27T22:00:30+00:00"
-    assert dynamodb.updates[0]["condition_expression"] is not None
-
-
 def test_crawl_runs_table_records_parser_progress() -> None:
     dynamodb = RecordingDynamoDBClient()
 
@@ -238,7 +221,7 @@ def test_crawl_runs_table_claims_generation_atomically() -> None:
     )
 
     assert claimed
-    assert dynamodb.updates[0]["expression_attribute_values"][":status"] == ("GENERATION_QUEUED")
+    assert dynamodb.updates[0]["expression_attribute_values"][":status"] == "GENERATING"
     assert dynamodb.updates[0]["condition_expression"] is not None
 
 
@@ -254,23 +237,6 @@ def test_crawl_runs_table_rejects_a_duplicate_generation_claim() -> None:
     )
 
     assert not claimed
-
-
-def test_crawl_runs_table_claims_generation_work_with_an_expiring_lease() -> None:
-    dynamodb = RecordingDynamoDBClient()
-
-    claimed = CrawlRunsTable(dynamodb).claim_generation_work(
-        site_id="site-1",
-        crawl_run_id="crawl-1",
-        claimed_at="2026-09-27T22:00:00+00:00",
-        lease_expires_at="2026-09-27T22:05:30+00:00",
-    )
-
-    assert claimed
-    values = dynamodb.updates[0]["expression_attribute_values"]
-    assert values[":generating"] == "GENERATING"
-    assert values[":lease_expires_at"] == "2026-09-27T22:05:30+00:00"
-    assert dynamodb.updates[0]["condition_expression"] is not None
 
 
 def test_llms_txt_versions_table_creates_a_version() -> None:

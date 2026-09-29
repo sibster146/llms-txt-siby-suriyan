@@ -95,22 +95,3 @@ def test_original_message_is_retried_if_scheduling_fails(monkeypatch: Any) -> No
     result = handler.lambda_handler(_event(), None)
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "message-1"}]}
-
-
-def test_leased_message_uses_native_sqs_retry_without_scheduling_a_copy(
-    monkeypatch: Any,
-) -> None:
-    retry = FakeQueue()
-    dlq = FakeQueue()
-    monkeypatch.setattr(handler, "_retry_queues", lambda: (retry, dlq))
-    monkeypatch.setattr(
-        handler,
-        "_process_record",
-        lambda _: (_ for _ in ()).throw(handler.GenerationLeaseUnavailableError("already leased")),
-    )
-
-    result = handler.lambda_handler(_event(), None)
-
-    assert result == {"batchItemFailures": [{"itemIdentifier": "message-1"}]}
-    assert retry.messages == []
-    assert dlq.messages == []

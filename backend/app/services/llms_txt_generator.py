@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
 from urllib.parse import urlsplit
@@ -30,7 +30,6 @@ PRODUCT_PATH_WORDS = {
     "solutions",
 }
 COMPANY_PATH_WORDS = {"about", "careers", "company", "contact", "news", "press", "team"}
-GENERATION_LEASE_SECONDS = 330
 
 
 class LlmsTxtGeneratorError(Exception):
@@ -39,10 +38,6 @@ class LlmsTxtGeneratorError(Exception):
 
 class GenerationMessageError(LlmsTxtGeneratorError):
     """Raised when a generation queue message does not match the contract."""
-
-
-class GenerationLeaseUnavailableError(LlmsTxtGeneratorError):
-    """Raised when another generator invocation owns the crawl-run lease."""
 
 
 class InvalidGenerationPlanError(LlmsTxtGeneratorError):
@@ -148,11 +143,7 @@ class LlmsTxtGeneratorService:
         )
         if crawl_run is None:
             raise LlmsTxtGeneratorError("Crawl run record does not exist")
-        if crawl_run.get("status") not in {
-            "GENERATION_QUEUED",
-            "GENERATING",
-            "COMPLETED",
-        }:
+        if crawl_run.get("status") not in {"GENERATING", "COMPLETED"}:
             raise LlmsTxtGeneratorError("Crawl run is not ready for generation")
 
         if crawl_run.get("status") == "COMPLETED":
@@ -160,31 +151,11 @@ class LlmsTxtGeneratorService:
             version_id = _version_id(crawl_created_at, request.crawl_run_id)
             if self.versions.get(site_id=request.site_id, version_id=version_id) is None:
                 raise LlmsTxtGeneratorError("Completed crawl run does not have a generated version")
-            return self._process_claimed(request, site, crawl_run)
+            return self._generate(request, site, crawl_run)
 
-        started_at = datetime.now(UTC)
-        claimed = self.crawl_runs.claim_generation_work(
-            site_id=request.site_id,
-            crawl_run_id=request.crawl_run_id,
-            claimed_at=started_at.isoformat(),
-            lease_expires_at=(started_at + timedelta(seconds=GENERATION_LEASE_SECONDS)).isoformat(),
-        )
-        if not claimed:
-            raise GenerationLeaseUnavailableError(
-                "Another generator invocation owns this crawl run"
-            )
+        return self._generate(request, site, crawl_run)
 
-        try:
-            return self._process_claimed(request, site, crawl_run)
-        except Exception:
-            self.crawl_runs.release_generation_work(
-                site_id=request.site_id,
-                crawl_run_id=request.crawl_run_id,
-                updated_at=datetime.now(UTC).isoformat(),
-            )
-            raise
-
-    def _process_claimed(
+    def _generate(
         self,
         request: GenerationRequest,
         site: dict[str, Any],

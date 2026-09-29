@@ -65,14 +65,12 @@ Generated files are stored under `llms-txt/{site_id}/{version_id}/llms.txt`, and
 corresponding DynamoDB site, crawl-run, and version records are updated after the object
 has been written.
 
-## SQS worker leases
+## Parser duplicate protection
 
-SQS provides at-least-once delivery, so every worker claims its unit of work with a
-conditional DynamoDB update before performing external work. The crawler and parser use
-page-level `CRAWLING` and `PARSING` leases; the generator uses a crawl-run-level
-`GENERATING` lease. A competing invocation leaves the message unacknowledged for retry.
-Handled failures release ownership immediately, while a crashed or timed-out invocation
-can be recovered after its stored lease-expiration timestamp.
+Before parsing, a worker atomically transitions the page identified by its crawl-run ID
+and canonical URL hash to `PARSING`. If another worker already holds an unexpired parsing
+lease, the duplicate delivery exits without writing parsed content or updating crawl
+counts. An expired lease can be reclaimed after a worker crashes or times out.
 
 ## GitHub Actions deployment
 

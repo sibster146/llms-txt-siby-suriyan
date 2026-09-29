@@ -5,7 +5,6 @@ import pytest
 
 from app.clients.bedrock import BedrockClientError
 from app.services.llms_txt_generator import (
-    GenerationLeaseUnavailableError,
     GenerationMessageError,
     InvalidGenerationPlanError,
     LlmsTxtGeneratorService,
@@ -33,25 +32,13 @@ class FakeCrawlRunsTable:
         self.record = {
             "site_id": "site-1",
             "crawl_run_id": "crawl-1",
-            "status": "GENERATION_QUEUED",
+            "status": "GENERATING",
             "created_at": "2026-09-28T12:34:56+00:00",
         }
         self.completed: list[dict[str, Any]] = []
-        self.claim_allowed = True
-        self.releases = 0
 
     def get(self, **_: Any) -> dict[str, Any]:
         return self.record
-
-    def claim_generation_work(self, **_: Any) -> bool:
-        if not self.claim_allowed or self.record["status"] == "GENERATING":
-            return False
-        self.record["status"] = "GENERATING"
-        return True
-
-    def release_generation_work(self, **_: Any) -> None:
-        self.record["status"] = "GENERATION_QUEUED"
-        self.releases += 1
 
     def mark_generation_completed(self, **kwargs: Any) -> None:
         self.events.append("run")
@@ -262,27 +249,6 @@ def test_generator_retry_reuses_the_existing_version() -> None:
     assert bedrock.calls == 1
     assert events == ["site", "run"]
     assert runs.record["status"] == "COMPLETED"
-
-
-def test_generator_retries_when_another_delivery_owns_the_lease() -> None:
-    service, _, runs, _, _, events = _service(FakeBedrockClient(_valid_plan()))
-    runs.claim_allowed = False
-
-    with pytest.raises(GenerationLeaseUnavailableError):
-        service.process_message(_message())
-
-    assert events == []
-
-
-def test_generator_releases_its_lease_when_persistence_fails() -> None:
-    service, _, runs, versions, _, _ = _service(FakeBedrockClient(_valid_plan()))
-    versions.create = lambda **_: (_ for _ in ()).throw(RuntimeError("unavailable"))
-
-    with pytest.raises(RuntimeError, match="unavailable"):
-        service.process_message(_message())
-
-    assert runs.releases == 1
-    assert runs.record["status"] == "GENERATION_QUEUED"
 
 
 def test_generator_rejects_an_invalid_queue_message() -> None:

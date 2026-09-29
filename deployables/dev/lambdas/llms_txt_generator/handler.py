@@ -22,11 +22,7 @@ from app.clients.bedrock import BedrockClient
 from app.clients.dynamodb import DynamoDBClient
 from app.clients.s3 import S3Client
 from app.clients.sqs import SQSClient
-from app.services.llms_txt_generator import (
-    GenerationLeaseUnavailableError,
-    GenerationMessageError,
-    LlmsTxtGeneratorService,
-)
+from app.services.llms_txt_generator import GenerationMessageError, LlmsTxtGeneratorService
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 from app.tables.llms_txt_versions import LlmsTxtVersionsTable
@@ -139,18 +135,6 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     for record in event.get("Records", []):
         try:
             _process_record(record)
-        except GenerationLeaseUnavailableError as error:
-            print(
-                json.dumps(
-                    {
-                        "level": "info",
-                        "message": "Generator message is already leased",
-                        "message_id": record.get("messageId", ""),
-                        "error": str(error),
-                    }
-                )
-            )
-            batch_item_failures.append({"itemIdentifier": record.get("messageId", "")})
         except Exception as error:
             print(
                 json.dumps(

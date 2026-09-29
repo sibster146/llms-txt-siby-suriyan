@@ -146,44 +146,19 @@ class CrawlPagesTable:
             },
         )
 
-    def claim_crawling(
+    def mark_crawling(
         self,
         *,
         crawl_run_id: str,
         canonical_url_hash: str,
-        claimed_at: str,
-        lease_expires_at: str,
-    ) -> bool:
-        try:
-            self.dynamodb.update_item(
-                key={
-                    "crawl_run_id": crawl_run_id,
-                    "canonical_url_hash": canonical_url_hash,
-                },
-                update_expression=(
-                    "SET #status = :crawling, crawl_started_at = :claimed_at, "
-                    "crawl_lease_expires_at = :lease_expires_at, updated_at = :claimed_at"
-                ),
-                expression_attribute_names={"#status": "status"},
-                expression_attribute_values={
-                    ":crawling": "CRAWLING",
-                    ":claimed_at": claimed_at,
-                    ":lease_expires_at": lease_expires_at,
-                },
-                condition_expression=(
-                    Attr("status").is_in(["DISCOVERED", "PENDING", "CRAWLED"])
-                    | (
-                        Attr("status").eq("CRAWLING")
-                        & (
-                            Attr("crawl_lease_expires_at").not_exists()
-                            | Attr("crawl_lease_expires_at").lt(claimed_at)
-                        )
-                    )
-                ),
-            )
-        except DynamoDBConditionNotMetError:
-            return False
-        return True
+        updated_at: str,
+    ) -> None:
+        self.update_status(
+            crawl_run_id=crawl_run_id,
+            canonical_url_hash=canonical_url_hash,
+            crawl_status="CRAWLING",
+            updated_at=updated_at,
+        )
 
     def mark_crawled(
         self,

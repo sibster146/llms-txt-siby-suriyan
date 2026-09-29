@@ -38,9 +38,7 @@ def _web_crawler_service() -> WebCrawlerService:
         crawl_runs=CrawlRunsTable(
             DynamoDBClient(table=dynamodb.Table(_required_env("CRAWL_RUNS_TABLE")))
         ),
-        sites=SitesTable(
-            DynamoDBClient(table=dynamodb.Table(_required_env("SITES_TABLE")))
-        ),
+        sites=SitesTable(DynamoDBClient(table=dynamodb.Table(_required_env("SITES_TABLE")))),
         s3=S3Client(
             client=session.client("s3", region_name=region),
             bucket_name=_required_env("APPLICATION_S3_BUCKET"),

@@ -89,10 +89,6 @@ class ParseMessageError(HtmlParserError):
     """Raised when a parser queue message does not match the contract."""
 
 
-class ParseLeaseUnavailableError(HtmlParserError):
-    """Raised when another parser invocation owns the page lease."""
-
-
 @dataclass(frozen=True)
 class ParseRequest:
     site_id: str
@@ -180,6 +176,8 @@ class HtmlParserService:
         )
         if page_record is None:
             raise HtmlParserError("CrawlPages record does not exist")
+        if page_record.get("site_id") != request.site_id:
+            raise HtmlParserError("Parser message does not match the stored site")
 
         if page_record.get("status") == "PARSED":
             self._publish_generation_if_complete(request)
@@ -202,7 +200,7 @@ class HtmlParserService:
             lease_expires_at=(started_at + timedelta(seconds=PARSING_LEASE_SECONDS)).isoformat(),
         )
         if not claimed:
-            raise ParseLeaseUnavailableError("Another parser invocation owns this page")
+            return
 
         try:
             raw_html = self.s3.get_bytes(request.raw_html_s3_key)

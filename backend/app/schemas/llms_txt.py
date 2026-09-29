@@ -21,9 +21,7 @@ class CrawlStatusResponse(BaseModel):
     crawl_run_id: str
     status: Literal[
         "PENDING",
-        "WORKING",
-        "CRAWLED",
-        "GENERATION_QUEUED",
+        "CRAWLING_AND_PARSING",
         "GENERATING",
         "COMPLETED",
         "FAILED",

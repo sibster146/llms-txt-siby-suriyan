@@ -30,6 +30,7 @@ interface HomePageProps {
 const terminalStatuses: CrawlStatus[] = ['COMPLETED', 'FAILED']
 
 function statusLabel(status: CrawlStatus): string {
+  if (status === 'CRAWLING_AND_PARSING') return 'Crawling and parsing'
   const label = status.toLowerCase().replaceAll('_', ' ')
   return label.charAt(0).toUpperCase() + label.slice(1)
 }
@@ -213,7 +214,7 @@ export function HomePage({ onSelectSite, onSignOut, user }: HomePageProps) {
                       </div>
                       {crawlStatus && (
                         <div className={`status-badge status-${crawlStatus.toLowerCase()}`}>
-                          {crawlStatus === 'COMPLETED' ? <CheckCircle2 size={15} /> : crawlStatus === 'FAILED' ? <AlertCircle size={15} /> : crawlStatus === 'WORKING' || crawlStatus === 'CRAWLED' || crawlStatus === 'GENERATION_QUEUED' || crawlStatus === 'GENERATING' ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
+                          {crawlStatus === 'COMPLETED' ? <CheckCircle2 size={15} /> : crawlStatus === 'FAILED' ? <AlertCircle size={15} /> : crawlStatus === 'CRAWLING_AND_PARSING' || crawlStatus === 'GENERATING' ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
                           {statusLabel(crawlStatus)}
                         </div>
                       )}
