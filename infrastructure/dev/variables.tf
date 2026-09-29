@@ -70,7 +70,7 @@ variable "parser_memory_size" {
 variable "generator_model_id" {
   description = "Amazon Bedrock model used to create the llms.txt plan."
   type        = string
-  default     = "amazon.nova-pro-v1:0"
+  default     = "us.moonshotai.kimi-k3"
 }
 
 variable "generator_max_input_pages" {

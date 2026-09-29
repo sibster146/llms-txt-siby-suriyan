@@ -89,7 +89,7 @@ data "aws_iam_policy_document" "permissions" {
   statement {
     sid       = "InvokeConfiguredBedrockModel"
     actions   = ["bedrock:InvokeModel"]
-    resources = [var.bedrock_model_arn]
+    resources = var.bedrock_model_arns
   }
 }
 

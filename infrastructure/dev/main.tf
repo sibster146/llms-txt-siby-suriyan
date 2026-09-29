@@ -1,3 +1,14 @@
+data "aws_caller_identity" "current" {}
+
+locals {
+  generator_foundation_model_id = trimprefix(var.generator_model_id, "us.")
+  generator_model_regions       = ["us-east-1", "us-east-2", "us-west-2"]
+  generator_model_arns = concat(
+    ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.generator_model_id}"],
+    [for region in local.generator_model_regions : "arn:aws:bedrock:${region}::foundation-model/${local.generator_foundation_model_id}"]
+  )
+}
+
 module "cognito" {
   source = "../modules/cognito"
 
@@ -135,7 +146,7 @@ module "llms_txt_generator_lambda" {
   application_bucket_name     = module.s3.bucket_name
   application_bucket_arn      = module.s3.bucket_arn
   bedrock_model_id            = var.generator_model_id
-  bedrock_model_arn           = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.generator_model_id}"
+  bedrock_model_arns          = local.generator_model_arns
   max_input_pages             = var.generator_max_input_pages
   max_output_links            = var.generator_max_output_links
   max_excerpt_chars           = var.generator_max_excerpt_chars

@@ -122,7 +122,7 @@ class FakeS3Client:
 
 
 class FakeBedrockClient:
-    model_id = "amazon.nova-pro-v1:0"
+    model_id = "us.moonshotai.kimi-k3"
 
     def __init__(self, result: dict[str, Any] | None = None, *, fail: bool = False) -> None:
         self.result = result or {}
@@ -199,24 +199,26 @@ def _service(
     return service, sites, runs, versions, s3, events
 
 
-def test_generator_uses_nova_plan_and_persists_before_completing() -> None:
+def test_generator_uses_kimi_plan_and_persists_before_completing() -> None:
     bedrock = FakeBedrockClient(_valid_plan())
     service, sites, runs, versions, s3, events = _service(bedrock)
 
     result = service.process_message(_message())
 
-    assert result.generation_method == "AMAZON_NOVA_PRO"
+    assert result.generation_method == "KIMI_K3"
     assert result.content.startswith("# Example\n\n> Example helps teams")
     assert "## Documentation" in result.content
     assert "[Getting started](<https://example.com/docs/start>)" in result.content
     assert events == ["s3", "version", "site", "run"]
     assert result.s3_key in s3.objects
-    assert versions.records[("site-1", result.version_id)]["model_id"] == ("amazon.nova-pro-v1:0")
+    assert versions.records[("site-1", result.version_id)]["model_id"] == (
+        "us.moonshotai.kimi-k3"
+    )
     assert sites.completed[0]["version_id"] == result.version_id
     assert runs.completed[0]["version_id"] == result.version_id
 
 
-def test_generator_ignores_unknown_and_duplicate_pages_in_nova_plan() -> None:
+def test_generator_ignores_unknown_and_duplicate_pages_in_kimi_plan() -> None:
     plan = _valid_plan()
     plan["sections"][0]["entries"][0]["page_id"] = "page_9999"
     plan["sections"][1]["entries"].append(
@@ -230,12 +232,12 @@ def test_generator_ignores_unknown_and_duplicate_pages_in_nova_plan() -> None:
 
     result = service.process_message(_message())
 
-    assert result.generation_method == "AMAZON_NOVA_PRO"
+    assert result.generation_method == "KIMI_K3"
     assert result.content.count("https://example.com/") == 1
     assert "page_9999" not in result.content
 
 
-def test_generator_falls_back_when_nova_plan_has_no_valid_pages() -> None:
+def test_generator_falls_back_when_kimi_plan_has_no_valid_pages() -> None:
     plan = _valid_plan()
     for section in plan["sections"]:
         for entry in section["entries"]:
@@ -246,6 +248,18 @@ def test_generator_falls_back_when_nova_plan_has_no_valid_pages() -> None:
 
     assert result.generation_method == "DETERMINISTIC_FALLBACK"
     assert "https://example.com/docs/start" in result.content
+
+
+def test_generator_uses_page_metadata_when_kimi_entry_text_is_empty() -> None:
+    plan = _valid_plan()
+    plan["sections"][0]["entries"][0]["title"] = ""
+    plan["sections"][0]["entries"][0]["description"] = ""
+    service, _, _, _, _, _ = _service(FakeBedrockClient(plan))
+
+    result = service.process_message(_message())
+
+    assert result.generation_method == "KIMI_K3"
+    assert "[Getting started](<https://example.com/docs/start>): Set up Example." in result.content
 
 
 def test_generator_falls_back_when_bedrock_is_unavailable(caplog: Any) -> None:

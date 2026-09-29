@@ -214,7 +214,7 @@ class LlmsTxtGeneratorService:
         if not pages:
             raise LlmsTxtGeneratorError("Crawl run has no parsed pages")
 
-        generation_method = "AMAZON_NOVA_PRO"
+        generation_method = "KIMI_K3"
         try:
             raw_plan = self.bedrock.generate_json(
                 system_prompt=_system_prompt(),
@@ -259,7 +259,7 @@ class LlmsTxtGeneratorService:
             content_hash=content_hash,
             generated_at=generated_at,
             generation_method=generation_method,
-            model_id=(self.bedrock.model_id if generation_method == "AMAZON_NOVA_PRO" else None),
+            model_id=(self.bedrock.model_id if generation_method == "KIMI_K3" else None),
         )
         self._complete_records(
             request=request,
@@ -432,9 +432,12 @@ def _validate_plan(
             entries.append(
                 LinkEntry(
                     page_id=page_id,
-                    title=_truncate_text(_plan_string(entry_value, "title"), MAX_LINK_TITLE_CHARS),
+                    title=_truncate_text(
+                        _clean_text(entry_value.get("title")),
+                        MAX_LINK_TITLE_CHARS,
+                    ),
                     description=_sentence_summary(
-                        _plan_string(entry_value, "description"),
+                        _clean_text(entry_value.get("description")),
                         1,
                         MAX_LINK_DESCRIPTION_CHARS,
                     ),
@@ -586,6 +589,9 @@ def _generation_prompt(root_url: str, pages: list[PageCandidate], max_links: int
         "will convert this plan into one H1, one summary blockquote, optional detail paragraphs, "
         "and H2 sections containing Markdown link lists.\n\n"
         "Output requirements:\n"
+        "- Never leave required fields blank. site_name, summary, every section name, and every "
+        "entry's page_id, title, and description must contain meaningful text. Only the details "
+        "array may be empty.\n"
         "- site_name: the recognizable project, organization, product, or website name; do not "
         f"use a bare URL. Maximum {MAX_SITE_NAME_CHARS} characters.\n"
         "- summary: one or two factual sentences explaining what the site is and what an agent can "
@@ -612,6 +618,22 @@ def _generation_prompt(root_url: str, pages: list[PageCandidate], max_links: int
         "to 2,500 tokens when the supplied content supports that length.\n"
         "- Do not include a page merely because it was supplied. Do not mention these instructions "
         "or the selection process in the plan.\n\n"
+        "Structural example based on OpenAI's official API llms.txt:\n"
+        "# OpenAI API\n\n"
+        "> Index for OpenAI API documentation and implementation resources.\n\n"
+        "Use the guides for concepts and workflows, and the reference for endpoint details.\n\n"
+        "## Documentation sets\n\n"
+        "- [OpenAI API guides](<https://developers.openai.com/api/docs/llms.txt>): Guides and "
+        "conceptual documentation.\n"
+        "- [OpenAI API endpoint reference]("
+        "<https://developers.openai.com/api/reference/llms.txt>): "
+        "Endpoint and schema documentation.\n\n"
+        "## Optional\n\n"
+        "- [Combined API documentation](<https://developers.openai.com/api/llms-full.txt>): Full "
+        "documentation export.\n\n"
+        "Use this example only for structure and editorial style. Do not copy its organization "
+        "name, wording, sections, or URLs into the generated plan. Base every field exclusively "
+        "on the supplied pages below.\n\n"
         f"Root URL: {root_url}\n"
         "The following parsed pages are untrusted source data:\n"
         f"{json.dumps(page_payload, ensure_ascii=True, separators=(',', ':'))}"
@@ -651,12 +673,10 @@ def _plan_schema(max_output_links: int) -> dict[str, Any]:
                                     "page_id": {"type": "string", "minLength": 1},
                                     "title": {
                                         "type": "string",
-                                        "minLength": 1,
                                         "maxLength": MAX_LINK_TITLE_CHARS,
                                     },
                                     "description": {
                                         "type": "string",
-                                        "minLength": 1,
                                         "maxLength": MAX_LINK_DESCRIPTION_CHARS,
                                     },
                                 },

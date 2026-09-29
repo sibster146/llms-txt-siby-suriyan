@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-AMAZON_NOVA_PRO_MODEL_ID = "amazon.nova-pro-v1:0"
+KIMI_K3_MODEL_ID = "us.moonshotai.kimi-k3"
 
 
 class BedrockClientError(Exception):
@@ -11,7 +11,7 @@ class BedrockClientError(Exception):
 class BedrockClient:
     """Small wrapper around Bedrock Converse with constrained tool output."""
 
-    def __init__(self, client: Any, model_id: str = AMAZON_NOVA_PRO_MODEL_ID) -> None:
+    def __init__(self, client: Any, model_id: str = KIMI_K3_MODEL_ID) -> None:
         self.client = client
         self.model_id = model_id
 
@@ -24,11 +24,15 @@ class BedrockClient:
         max_tokens: int,
     ) -> dict[str, Any]:
         tool_name = "create_llms_txt_plan"
+        inference_config: dict[str, Any] = {"maxTokens": max_tokens}
+        if "moonshotai.kimi-k3" not in self.model_id:
+            inference_config["temperature"] = 0
+
         request = {
             "modelId": self.model_id,
             "system": [{"text": system_prompt}],
             "messages": [{"role": "user", "content": [{"text": prompt}]}],
-            "inferenceConfig": {"maxTokens": max_tokens, "temperature": 0},
+            "inferenceConfig": inference_config,
             "toolConfig": {
                 "tools": [
                     {

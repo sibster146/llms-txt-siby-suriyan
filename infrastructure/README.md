@@ -89,27 +89,27 @@ The GitHub `dev` environment must define:
 - `AWS_REGION`
 - `AWS_DEPLOY_ROLE_ARN`
 
-The following optional GitHub `dev` environment variables control parser behavior and
-capacity without requiring code changes:
+Parser behavior and capacity are controlled by Terraform variables in
+`infrastructure/dev/variables.tf`:
 
-- `PARSER_MAX_ATTEMPTS` (default: `2`, one initial attempt and one retry)
-- `PARSER_RETRY_DELAY_SECONDS` (default: `30`)
-- `PARSER_MAX_DEPTH` (default: `2`)
-- `PARSER_MAX_DISCOVERED_PAGES` (default: `1000`, including the root page)
-- `PARSER_MAX_LINKS_PER_PAGE` (default: `100`)
-- `PARSER_MAXIMUM_CONCURRENCY` (default: `25`)
-- `PARSER_MEMORY_SIZE` (default: `2048` MB)
+- `parser_max_attempts` (default: `2`, one initial attempt and one retry)
+- `parser_retry_delay_seconds` (default: `30`)
+- `parser_max_depth` (default: `2`)
+- `parser_max_discovered_pages` (default: `1000`, including the root page)
+- `parser_max_links_per_page` (default: `100`)
+- `parser_maximum_concurrency` (default: `25`)
+- `parser_memory_size` (default: `2048` MB)
 
-The following optional variables control generator behavior and capacity:
+The following Terraform variables control generator behavior and capacity:
 
-- `GENERATOR_MODEL_ID` (default: `amazon.nova-pro-v1:0`)
-- `GENERATOR_MAX_INPUT_PAGES` (default: `500`)
-- `GENERATOR_MAX_OUTPUT_LINKS` (default: `30`)
-- `GENERATOR_MAX_EXCERPT_CHARS` (default: `1000`)
-- `GENERATOR_MAX_MODEL_TOKENS` (default: `4000`)
-- `GENERATOR_MAXIMUM_CONCURRENCY` (default: `2`)
-- `GENERATOR_MEMORY_SIZE` (default: `1024` MB)
-- `GENERATOR_TIMEOUT_SECONDS` (default: `300`)
+- `generator_model_id` (default: `us.moonshotai.kimi-k3`)
+- `generator_max_input_pages` (default: `500`)
+- `generator_max_output_links` (default: `30`)
+- `generator_max_excerpt_chars` (default: `1000`)
+- `generator_max_model_tokens` (default: `4000`)
+- `generator_maximum_concurrency` (default: `2`)
+- `generator_memory_size` (default: `1024` MB)
+- `generator_timeout_seconds` (default: `300`)
 
 Attach the permissions in `github-actions-dev-policy.json` to that deployment role. The state bucket is named `dev-llms-txt-<account-id>-terraform-state`; S3 bucket names cannot contain underscores, so this is the AWS-required exception to the resource naming convention.
 

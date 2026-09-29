@@ -33,6 +33,7 @@ function formatDate(value: string): string {
 
 function methodLabel(method: string | null): string {
   if (method === 'AMAZON_NOVA_PRO') return 'Amazon Nova Pro'
+  if (method === 'KIMI_K3') return 'Moonshot AI Kimi K3'
   if (method === 'DETERMINISTIC_FALLBACK') return 'Deterministic fallback'
   return method?.toLowerCase().replaceAll('_', ' ') ?? 'Unknown'
 }

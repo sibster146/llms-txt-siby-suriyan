@@ -26,8 +26,8 @@ describe('LLMTxtPage', () => {
         generated_at: '2026-09-28T12:00:00+00:00',
         content_hash: 'hash-2',
         status: 'CURRENT',
-        generation_method: 'AMAZON_NOVA_PRO',
-        model_id: 'amazon.nova-pro-v1:0',
+        generation_method: 'KIMI_K3',
+        model_id: 'us.moonshotai.kimi-k3',
         content: '# Current file',
       },
       versions: [
@@ -38,8 +38,8 @@ describe('LLMTxtPage', () => {
           generated_at: '2026-09-28T12:00:00+00:00',
           content_hash: 'hash-2',
           status: 'CURRENT',
-          generation_method: 'AMAZON_NOVA_PRO',
-          model_id: 'amazon.nova-pro-v1:0',
+          generation_method: 'KIMI_K3',
+          model_id: 'us.moonshotai.kimi-k3',
         },
         {
           site_id: 'site-1',

@@ -114,12 +114,12 @@ variable "application_bucket_arn" {
 variable "bedrock_model_id" {
   description = "Bedrock model ID used to create the llms.txt plan."
   type        = string
-  default     = "amazon.nova-pro-v1:0"
+  default     = "us.moonshotai.kimi-k3"
 }
 
-variable "bedrock_model_arn" {
-  description = "Bedrock model ARN the Lambda may invoke."
-  type        = string
+variable "bedrock_model_arns" {
+  description = "Bedrock inference profile and routed model ARNs the Lambda may invoke."
+  type        = list(string)
 }
 
 variable "max_input_pages" {

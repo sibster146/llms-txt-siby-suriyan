@@ -23,21 +23,6 @@ jobs:
     environment: dev
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      TF_VAR_parser_max_attempts: ${{ vars.PARSER_MAX_ATTEMPTS || '2' }}
-      TF_VAR_parser_retry_delay_seconds: ${{ vars.PARSER_RETRY_DELAY_SECONDS || '30' }}
-      TF_VAR_parser_max_depth: ${{ vars.PARSER_MAX_DEPTH || '2' }}
-      TF_VAR_parser_max_discovered_pages: ${{ vars.PARSER_MAX_DISCOVERED_PAGES || '1000' }}
-      TF_VAR_parser_max_links_per_page: ${{ vars.PARSER_MAX_LINKS_PER_PAGE || '100' }}
-      TF_VAR_parser_maximum_concurrency: ${{ vars.PARSER_MAXIMUM_CONCURRENCY || '25' }}
-      TF_VAR_parser_memory_size: ${{ vars.PARSER_MEMORY_SIZE || '2048' }}
-      TF_VAR_generator_model_id: ${{ vars.GENERATOR_MODEL_ID || 'amazon.nova-pro-v1:0' }}
-      TF_VAR_generator_max_input_pages: ${{ vars.GENERATOR_MAX_INPUT_PAGES || '500' }}
-      TF_VAR_generator_max_output_links: ${{ vars.GENERATOR_MAX_OUTPUT_LINKS || '30' }}
-      TF_VAR_generator_max_excerpt_chars: ${{ vars.GENERATOR_MAX_EXCERPT_CHARS || '1000' }}
-      TF_VAR_generator_max_model_tokens: ${{ vars.GENERATOR_MAX_MODEL_TOKENS || '4000' }}
-      TF_VAR_generator_maximum_concurrency: ${{ vars.GENERATOR_MAXIMUM_CONCURRENCY || '2' }}
-      TF_VAR_generator_memory_size: ${{ vars.GENERATOR_MEMORY_SIZE || '1024' }}
-      TF_VAR_generator_timeout_seconds: ${{ vars.GENERATOR_TIMEOUT_SECONDS || '300' }}
       TF_IN_AUTOMATION: true
       TF_INPUT: false
     steps:
