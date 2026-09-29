@@ -49,11 +49,11 @@ The development configuration creates a private, encrypted, versioned `dev-llms-
 
 ## Development web crawler
 
-The web crawler is deployed as the `dev_llms_txt_web_crawler` Lambda using an image in the immutable `dev_llms_txt_web_crawler` ECR repository. It consumes one crawl message per invocation, stores raw HTML under the S3 `raw/` prefix, updates the crawl-pages table, and publishes successful downloads to the parse queue. Its execution role is limited to those resources.
+The web crawler is deployed as the `dev_llms_txt_web_crawler` Lambda using an image in the mutable `dev_llms_txt_web_crawler` ECR repository. It consumes one crawl message per invocation, stores raw HTML under the S3 `raw/` prefix, updates the crawl-pages table, and publishes successful downloads to the parse queue. Its execution role is limited to those resources.
 
 ## Development HTML parser
 
-The parser is deployed as the `dev_llms_txt_html_parser` Lambda using an image in the immutable `dev_llms_txt_html_parser` ECR repository. It consumes the parse queue, stores changed page content under the S3 `parsed/` prefix, rediscovers same-site child links, and publishes those links to the crawl queue. When every page in a crawl is terminal, it publishes the run to the `llm_txt` queue.
+The parser is deployed as the `dev_llms_txt_html_parser` Lambda using an image in the mutable `dev_llms_txt_html_parser` ECR repository. It consumes the parse queue, stores changed page content under the S3 `parsed/` prefix, rediscovers same-site child links, and publishes those links to the crawl queue. When every page in a crawl is terminal, it publishes the run to the `llm_txt` queue.
 
 ## Development llms.txt generator
 
@@ -87,7 +87,7 @@ Pushes to `feature/**` and `dev` run `.github/workflows/deploy-dev-infrastructur
 2. Creates the encrypted, versioned development state bucket if it does not exist.
 3. Initializes Terraform with S3 state and native state locking.
 4. Provisions all four Lambda ECR repositories in a targeted bootstrap apply.
-5. Builds the crawler, parser, generator, and nightly refresh images and pushes them with the Git commit SHA as their immutable tag.
+5. Builds the crawler, parser, generator, and nightly refresh images and pushes them with the Git commit SHA as a mutable deployment tag.
 6. Plans and applies the complete development infrastructure using that image.
 7. Writes Cognito and Lambda deployment details to the workflow summary.
 
