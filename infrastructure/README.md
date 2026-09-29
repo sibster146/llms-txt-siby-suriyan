@@ -59,11 +59,10 @@ The parser is deployed as the `dev_llms_txt_html_parser` Lambda using an image i
 
 The generator is deployed as the `dev_llms_txt_generator` Lambda using an image
 in the matching ECR repository. It consumes `llm_txt_sqs`, reads parsed crawl content,
-uses Amazon Nova Pro to curate a structured plan, validates and renders the plan, and
-falls back to deterministic generation when the model response is unavailable or invalid.
-Generated files are stored under `llms-txt/{site_id}/{version_id}/llms.txt`, and the
-corresponding DynamoDB site, crawl-run, and version records are updated after the object
-has been written.
+and asks Moonshot AI Kimi K3 to produce the complete `llms.txt`. The model response is
+stored unchanged without output validation or deterministic fallback. Generated files are
+stored under `llms-txt/{site_id}/{version_id}/llms.txt`, and the corresponding DynamoDB
+site, crawl-run, and version records are updated after the object has been written.
 
 ## Parser duplicate protection
 

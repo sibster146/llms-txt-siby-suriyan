@@ -97,3 +97,52 @@ def test_bedrock_client_rejects_a_response_without_structured_output() -> None:
             schema={"type": "object"},
             max_tokens=100,
         )
+
+
+def test_bedrock_client_returns_model_text_unchanged() -> None:
+    runtime = FakeBedrockRuntime(
+        {
+            "output": {
+                "message": {
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": "thinking"}}},
+                        {"text": "```markdown\n# Example\n```\n"},
+                    ]
+                }
+            }
+        }
+    )
+    client = BedrockClient(runtime)
+
+    result = client.generate_text(
+        system_prompt="System",
+        prompt="Prompt",
+        max_tokens=100,
+    )
+
+    assert result == "```markdown\n# Example\n```\n"
+    assert runtime.calls[0]["inferenceConfig"] == {"maxTokens": 100}
+    assert "toolConfig" not in runtime.calls[0]
+
+
+def test_bedrock_client_rejects_a_response_without_text() -> None:
+    client = BedrockClient(
+        FakeBedrockRuntime(
+            {
+                "output": {
+                    "message": {
+                        "content": [
+                            {"reasoningContent": {"reasoningText": {"text": "thinking"}}}
+                        ]
+                    }
+                }
+            }
+        )
+    )
+
+    with pytest.raises(BedrockClientError, match="did not return text content"):
+        client.generate_text(
+            system_prompt="System",
+            prompt="Prompt",
+            max_tokens=100,
+        )

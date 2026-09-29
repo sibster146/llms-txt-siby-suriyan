@@ -2,8 +2,9 @@
 
 This image contains the thin SQS handler plus the shared backend application code.
 The Lambda consumes `llm_txt_sqs`, loads parsed pages for the crawl run, asks Amazon
-Nova Pro for a structured plan, validates and renders the plan, and falls back to
-deterministic generation if the model response is unavailable or invalid.
+Bedrock's Moonshot AI Kimi K3 model for the complete `llms.txt`, and stores the model
+response unchanged. Output validation and deterministic fallback remain disabled; model
+or API failures follow the normal queue retry path.
 
 Unexpected processing failures are requeued with a 30-second delivery delay. The
 message carries its attempt number and is sent to `llm_txt_dlq` after four failed

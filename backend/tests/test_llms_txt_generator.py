@@ -124,12 +124,12 @@ class FakeS3Client:
 class FakeBedrockClient:
     model_id = "us.moonshotai.kimi-k3"
 
-    def __init__(self, result: dict[str, Any] | None = None, *, fail: bool = False) -> None:
-        self.result = result or {}
+    def __init__(self, result: str = "", *, fail: bool = False) -> None:
+        self.result = result
         self.fail = fail
         self.calls = 0
 
-    def generate_json(self, **_: Any) -> dict[str, Any]:
+    def generate_text(self, **_: Any) -> str:
         self.calls += 1
         if self.fail:
             raise BedrockClientError("unavailable")
@@ -173,6 +173,18 @@ def _valid_plan() -> dict[str, Any]:
     }
 
 
+def _valid_content() -> str:
+    return (
+        "# Example\n\n"
+        "> Example helps teams build useful things.\n\n"
+        "Use the documentation to get started.\n\n"
+        "## Documentation\n\n"
+        "- [Getting started](<https://example.com/docs/start>): Set up Example.\n\n"
+        "## Resources\n\n"
+        "- [Example home](<https://example.com/>): Overview of Example.\n"
+    )
+
+
 def _service(
     bedrock: FakeBedrockClient,
 ) -> tuple[
@@ -199,8 +211,8 @@ def _service(
     return service, sites, runs, versions, s3, events
 
 
-def test_generator_uses_kimi_plan_and_persists_before_completing() -> None:
-    bedrock = FakeBedrockClient(_valid_plan())
+def test_generator_persists_kimi_output_before_completing() -> None:
+    bedrock = FakeBedrockClient(_valid_content())
     service, sites, runs, versions, s3, events = _service(bedrock)
 
     result = service.process_message(_message())
@@ -218,59 +230,34 @@ def test_generator_uses_kimi_plan_and_persists_before_completing() -> None:
     assert runs.completed[0]["version_id"] == result.version_id
 
 
-def test_generator_ignores_unknown_and_duplicate_pages_in_kimi_plan() -> None:
-    plan = _valid_plan()
-    plan["sections"][0]["entries"][0]["page_id"] = "page_9999"
-    plan["sections"][1]["entries"].append(
-        {
-            "page_id": "page_0001",
-            "title": "Duplicate home",
-            "description": "A duplicate entry.",
-        }
-    )
-    service, _, _, _, _, _ = _service(FakeBedrockClient(plan))
+def test_generator_persists_model_output_without_validation() -> None:
+    model_output = "This is not a spec-compliant llms.txt file."
+    service, _, _, _, s3, _ = _service(FakeBedrockClient(model_output))
 
     result = service.process_message(_message())
 
     assert result.generation_method == "KIMI_K3"
-    assert result.content.count("https://example.com/") == 1
-    assert "page_9999" not in result.content
+    assert result.content == model_output
+    assert s3.objects[result.s3_key] == model_output
 
 
-def test_generator_falls_back_when_kimi_plan_has_no_valid_pages() -> None:
-    plan = _valid_plan()
-    for section in plan["sections"]:
-        for entry in section["entries"]:
-            entry["page_id"] = "page_9999"
-    service, _, _, _, _, _ = _service(FakeBedrockClient(plan))
+def test_generator_preserves_markdown_fences_from_model() -> None:
+    model_output = "```markdown\n# Example\n```\n"
+    service, _, _, _, _, _ = _service(FakeBedrockClient(model_output))
 
     result = service.process_message(_message())
 
-    assert result.generation_method == "DETERMINISTIC_FALLBACK"
-    assert "https://example.com/docs/start" in result.content
+    assert result.content == model_output
 
 
-def test_generator_uses_page_metadata_when_kimi_entry_text_is_empty() -> None:
-    plan = _valid_plan()
-    plan["sections"][0]["entries"][0]["title"] = ""
-    plan["sections"][0]["entries"][0]["description"] = ""
-    service, _, _, _, _, _ = _service(FakeBedrockClient(plan))
+def test_generator_propagates_bedrock_failure_without_creating_a_version() -> None:
+    service, _, _, versions, _, events = _service(FakeBedrockClient(fail=True))
 
-    result = service.process_message(_message())
+    with pytest.raises(BedrockClientError, match="unavailable"):
+        service.process_message(_message())
 
-    assert result.generation_method == "KIMI_K3"
-    assert "[Getting started](<https://example.com/docs/start>): Set up Example." in result.content
-
-
-def test_generator_falls_back_when_bedrock_is_unavailable(caplog: Any) -> None:
-    service, _, _, versions, _, _ = _service(FakeBedrockClient(fail=True))
-
-    result = service.process_message(_message())
-
-    assert result.generation_method == "DETERMINISTIC_FALLBACK"
-    record = versions.records[("site-1", result.version_id)]
-    assert record["model_id"] is None
-    assert "error_type=BedrockClientError error=unavailable" in caplog.text
+    assert versions.records == {}
+    assert events == []
 
 
 def test_deterministic_fallback_applies_editorial_constraints() -> None:
@@ -322,7 +309,7 @@ def test_deterministic_fallback_applies_editorial_constraints() -> None:
 
 
 def test_generator_retry_reuses_the_existing_version() -> None:
-    bedrock = FakeBedrockClient(_valid_plan())
+    bedrock = FakeBedrockClient(_valid_content())
     service, _, runs, _, _, events = _service(bedrock)
     first = service.process_message(_message())
     events.clear()
@@ -337,7 +324,7 @@ def test_generator_retry_reuses_the_existing_version() -> None:
 
 
 def test_generator_rejects_an_invalid_queue_message() -> None:
-    service, _, _, _, _, _ = _service(FakeBedrockClient(_valid_plan()))
+    service, _, _, _, _, _ = _service(FakeBedrockClient(_valid_content()))
 
     with pytest.raises(GenerationMessageError):
         service.process_message({"action": "wrong", "payload": {}})
