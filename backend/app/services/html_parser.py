@@ -130,8 +130,6 @@ class ParseRequest:
             include_root=True,
         ):
             raise ParseMessageError("url is outside the root URL hierarchy")
-        if not is_url_within_root(request.final_url, request.root_url, include_root=True):
-            raise ParseMessageError("final_url is outside the root URL hierarchy")
         return request
 
 

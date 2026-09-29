@@ -446,3 +446,22 @@ def test_parser_rejects_a_mismatched_url_hash() -> None:
 
     with pytest.raises(ParseMessageError):
         service.process_message(message)
+
+
+def test_parser_accepts_a_page_redirected_outside_the_root_hierarchy() -> None:
+    message = _message()
+    message["payload"]["final_url"] = "https://docs.example.com/guide"
+    service, pages, _, _, _ = _service(
+        b"<html><head><title>Guide</title></head><body><main>Documentation</main></body></html>"
+    )
+
+    service.process_message(message)
+
+    page = pages.get(
+        crawl_run_id="crawl-1",
+        canonical_url_hash=message["payload"]["canonical_url_hash"],
+    )
+    assert page is not None
+    assert page["status"] == "PARSED"
+    assert service.crawl_runs.completed_page_count == 1
+    assert service.crawl_runs.pending_page_count == 0
