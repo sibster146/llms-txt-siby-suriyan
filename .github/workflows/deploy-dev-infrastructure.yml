@@ -31,9 +31,9 @@ jobs:
       TF_VAR_parser_memory_size: ${{ vars.PARSER_MEMORY_SIZE || '2048' }}
       TF_VAR_generator_model_id: ${{ vars.GENERATOR_MODEL_ID || 'amazon.nova-pro-v1:0' }}
       TF_VAR_generator_max_input_pages: ${{ vars.GENERATOR_MAX_INPUT_PAGES || '500' }}
-      TF_VAR_generator_max_output_links: ${{ vars.GENERATOR_MAX_OUTPUT_LINKS || '200' }}
+      TF_VAR_generator_max_output_links: ${{ vars.GENERATOR_MAX_OUTPUT_LINKS || '50' }}
       TF_VAR_generator_max_excerpt_chars: ${{ vars.GENERATOR_MAX_EXCERPT_CHARS || '1000' }}
-      TF_VAR_generator_max_model_tokens: ${{ vars.GENERATOR_MAX_MODEL_TOKENS || '8000' }}
+      TF_VAR_generator_max_model_tokens: ${{ vars.GENERATOR_MAX_MODEL_TOKENS || '5000' }}
       TF_VAR_generator_maximum_concurrency: ${{ vars.GENERATOR_MAXIMUM_CONCURRENCY || '2' }}
       TF_VAR_generator_memory_size: ${{ vars.GENERATOR_MEMORY_SIZE || '1024' }}
       TF_VAR_generator_timeout_seconds: ${{ vars.GENERATOR_TIMEOUT_SECONDS || '300' }}

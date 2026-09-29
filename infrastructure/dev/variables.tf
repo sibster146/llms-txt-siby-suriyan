@@ -74,9 +74,9 @@ variable "generator_max_input_pages" {
 }
 
 variable "generator_max_output_links" {
-  description = "Maximum links allowed in the generated llms.txt."
+  description = "Maximum curated links allowed in the generated llms.txt."
   type        = number
-  default     = 200
+  default     = 50
 }
 
 variable "generator_max_excerpt_chars" {
@@ -88,7 +88,7 @@ variable "generator_max_excerpt_chars" {
 variable "generator_max_model_tokens" {
   description = "Maximum tokens returned by Amazon Bedrock."
   type        = number
-  default     = 8000
+  default     = 5000
 }
 
 variable "generator_maximum_concurrency" {

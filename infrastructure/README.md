@@ -103,9 +103,9 @@ The following optional variables control generator behavior and capacity:
 
 - `GENERATOR_MODEL_ID` (default: `amazon.nova-pro-v1:0`)
 - `GENERATOR_MAX_INPUT_PAGES` (default: `500`)
-- `GENERATOR_MAX_OUTPUT_LINKS` (default: `200`)
+- `GENERATOR_MAX_OUTPUT_LINKS` (default: `50`)
 - `GENERATOR_MAX_EXCERPT_CHARS` (default: `1000`)
-- `GENERATOR_MAX_MODEL_TOKENS` (default: `8000`)
+- `GENERATOR_MAX_MODEL_TOKENS` (default: `5000`)
 - `GENERATOR_MAXIMUM_CONCURRENCY` (default: `2`)
 - `GENERATOR_MEMORY_SIZE` (default: `1024` MB)
 - `GENERATOR_TIMEOUT_SECONDS` (default: `300`)
