@@ -25,6 +25,23 @@ variable "llms_txt_generator_image_uri" {
   type        = string
 }
 
+variable "nightly_refresh_image_uri" {
+  description = "Commit-tagged ECR image URI for the nightly refresh Lambda."
+  type        = string
+}
+
+variable "nightly_refresh_schedule_expression" {
+  description = "EventBridge Scheduler expression for nightly website refreshes."
+  type        = string
+  default     = "cron(0 3 * * ? *)"
+}
+
+variable "nightly_refresh_schedule_timezone" {
+  description = "IANA timezone used to evaluate the nightly refresh schedule."
+  type        = string
+  default     = "America/New_York"
+}
+
 variable "parser_max_attempts" {
   description = "Maximum parser deliveries before a message reaches the DLQ."
   type        = number

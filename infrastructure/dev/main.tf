@@ -71,6 +71,14 @@ module "llms_txt_generator_ecr" {
   repository_name = "generator"
 }
 
+module "nightly_refresh_ecr" {
+  source = "../modules/ecr"
+
+  environment     = "dev"
+  project_name    = var.project_name
+  repository_name = "nightly_refresh"
+}
+
 module "web_crawler_lambda" {
   source = "../modules/web_crawler_lambda"
 
@@ -154,4 +162,22 @@ module "llms_txt_generator_lambda" {
   maximum_concurrency         = var.generator_maximum_concurrency
   memory_size                 = var.generator_memory_size
   timeout_seconds             = var.generator_timeout_seconds
+}
+
+module "nightly_refresh_lambda" {
+  source = "../modules/nightly_refresh_lambda"
+
+  environment            = "dev"
+  project_name           = var.project_name
+  image_uri              = var.nightly_refresh_image_uri
+  sites_table_name       = module.dynamodb.table_names.sites
+  sites_table_arn        = module.dynamodb.table_arns.sites
+  crawl_runs_table_name  = module.dynamodb.table_names.crawl_runs
+  crawl_runs_table_arn   = module.dynamodb.table_arns.crawl_runs
+  crawl_pages_table_name = module.dynamodb.table_names.crawl_pages
+  crawl_pages_table_arn  = module.dynamodb.table_arns.crawl_pages
+  crawl_queue_url        = module.sqs.queue_urls.crawl
+  crawl_queue_arn        = module.sqs.queue_arns.crawl
+  schedule_expression    = var.nightly_refresh_schedule_expression
+  schedule_timezone      = var.nightly_refresh_schedule_timezone
 }

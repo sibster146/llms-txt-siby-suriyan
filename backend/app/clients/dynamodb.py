@@ -150,14 +150,21 @@ class DynamoDBClient:
         if filter_expression is not None:
             kwargs["FilterExpression"] = filter_expression
 
+        items: list[dict[str, Any]] = []
         try:
-            response = self.table.scan(**kwargs)
+            while True:
+                response = self.table.scan(**kwargs)
+                items.extend(response.get("Items", []))
+                last_key = response.get("LastEvaluatedKey")
+                if not last_key:
+                    break
+                kwargs["ExclusiveStartKey"] = last_key
         except Exception as error:
             raise DynamoDBClientError(
                 message=f"Failed to scan DynamoDB: {error}",
                 code="DYNAMODB_SCAN_FAILED",
             ) from error
-        return response.get("Items", [])
+        return items
 
     def update_item(
         self,

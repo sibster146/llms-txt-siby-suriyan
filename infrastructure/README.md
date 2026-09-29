@@ -64,6 +64,14 @@ stored unchanged without output validation or deterministic fallback. Generated 
 stored under `llms-txt/{site_id}/{version_id}/llms.txt`, and the corresponding DynamoDB
 site, crawl-run, and version records are updated after the object has been written.
 
+## Development nightly refresh
+
+EventBridge Scheduler invokes `dev_llms_txt_nightly_refresh` every day at 3:00 AM in
+`America/New_York`. The Lambda scans the Sites table and queues a fresh root crawl for
+every registered site. The schedule uses deterministic crawl-run IDs so EventBridge
+retries do not create duplicate runs. Daylight-saving changes are handled by the schedule
+timezone rather than a fixed UTC offset.
+
 ## Parser duplicate protection
 
 Before parsing, a worker atomically transitions the page identified by its crawl-run ID
@@ -78,8 +86,8 @@ Pushes to `feature/**` and `dev` run `.github/workflows/deploy-dev-infrastructur
 1. Assumes the AWS deployment role through GitHub OIDC.
 2. Creates the encrypted, versioned development state bucket if it does not exist.
 3. Initializes Terraform with S3 state and native state locking.
-4. Provisions all three Lambda ECR repositories in a targeted bootstrap apply.
-5. Builds the crawler, parser, and generator images and pushes them with the Git commit SHA as their immutable tag.
+4. Provisions all four Lambda ECR repositories in a targeted bootstrap apply.
+5. Builds the crawler, parser, generator, and nightly refresh images and pushes them with the Git commit SHA as their immutable tag.
 6. Plans and applies the complete development infrastructure using that image.
 7. Writes Cognito and Lambda deployment details to the workflow summary.
 
@@ -109,6 +117,11 @@ The following Terraform variables control generator behavior and capacity:
 - `generator_maximum_concurrency` (default: `2`)
 - `generator_memory_size` (default: `1024` MB)
 - `generator_timeout_seconds` (default: `300`)
+
+The nightly schedule is controlled by Terraform variables:
+
+- `nightly_refresh_schedule_expression` (default: `cron(0 3 * * ? *)`)
+- `nightly_refresh_schedule_timezone` (default: `America/New_York`)
 
 Attach the permissions in `github-actions-dev-policy.json` to that deployment role. The state bucket is named `dev-llms-txt-<account-id>-terraform-state`; S3 bucket names cannot contain underscores, so this is the AWS-required exception to the resource naming convention.
 

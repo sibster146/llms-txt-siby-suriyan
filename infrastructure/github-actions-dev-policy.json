@@ -137,6 +137,29 @@
       "Effect": "Allow",
       "Action": "logs:DescribeLogGroups",
       "Resource": "*"
+    },
+    {
+      "Sid": "ListEventBridgeSchedules",
+      "Effect": "Allow",
+      "Action": [
+        "scheduler:ListScheduleGroups",
+        "scheduler:ListSchedules"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageDevelopmentEventBridgeSchedules",
+      "Effect": "Allow",
+      "Action": [
+        "scheduler:CreateSchedule",
+        "scheduler:DeleteSchedule",
+        "scheduler:GetSchedule",
+        "scheduler:ListTagsForResource",
+        "scheduler:TagResource",
+        "scheduler:UntagResource",
+        "scheduler:UpdateSchedule"
+      ],
+      "Resource": "arn:aws:scheduler:*:*:schedule/default/dev_llms_txt_*"
     }
   ]
 }

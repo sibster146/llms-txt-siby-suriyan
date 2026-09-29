@@ -92,3 +92,18 @@ output "llms_txt_generator_lambda_arn" {
   description = "Development llms.txt generator Lambda function ARN."
   value       = module.llms_txt_generator_lambda.function_arn
 }
+
+output "nightly_refresh_ecr_repository_url" {
+  description = "ECR repository used by the nightly refresh Lambda."
+  value       = module.nightly_refresh_ecr.repository_url
+}
+
+output "nightly_refresh_lambda_name" {
+  description = "Development nightly refresh Lambda function name."
+  value       = module.nightly_refresh_lambda.function_name
+}
+
+output "nightly_refresh_schedule_name" {
+  description = "Development nightly refresh EventBridge schedule name."
+  value       = module.nightly_refresh_lambda.schedule_name
+}

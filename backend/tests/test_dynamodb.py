@@ -131,6 +131,25 @@ def test_query_honors_an_explicit_limit_without_pagination() -> None:
     assert table.calls == 1
 
 
+def test_scan_loads_every_page() -> None:
+    class PaginatedTable:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def scan(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            if "ExclusiveStartKey" not in kwargs:
+                return {"Items": [{"id": "1"}], "LastEvaluatedKey": {"id": "1"}}
+            return {"Items": [{"id": "2"}]}
+
+    table = PaginatedTable()
+
+    items = DynamoDBClient(table).scan()
+
+    assert items == [{"id": "1"}, {"id": "2"}]
+    assert table.calls[1]["ExclusiveStartKey"] == {"id": "1"}
+
+
 @pytest.mark.parametrize("environment", ["dev", "prod"])
 def test_settings_build_environment_specific_table_names(
     monkeypatch: pytest.MonkeyPatch,

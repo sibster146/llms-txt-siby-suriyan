@@ -51,10 +51,12 @@ jobs:
           crawler_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_web_crawler"
           parser_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_html_parser"
           generator_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_generator"
+          refresh_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_nightly_refresh"
           echo "bucket=${bucket}" >> "${GITHUB_OUTPUT}"
           echo "TF_VAR_web_crawler_image_uri=${crawler_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_html_parser_image_uri=${parser_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_llms_txt_generator_image_uri=${generator_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_nightly_refresh_image_uri=${refresh_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
 
       - name: Prepare remote state
         env:
@@ -83,6 +85,7 @@ jobs:
             -target=module.web_crawler_ecr \
             -target=module.html_parser_ecr \
             -target=module.llms_txt_generator_ecr \
+            -target=module.nightly_refresh_ecr \
             -out=ecr.tfplan
           terraform -chdir=infrastructure/dev apply -auto-approve ecr.tfplan
 
@@ -106,6 +109,13 @@ jobs:
           repository=$(terraform -chdir=infrastructure/dev output -raw llms_txt_generator_ecr_repository_url)
           echo "LLMS_TXT_GENERATOR_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_llms_txt_generator_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Resolve nightly refresh image URI
+        shell: bash
+        run: |
+          repository=$(terraform -chdir=infrastructure/dev output -raw nightly_refresh_ecr_repository_url)
+          echo "NIGHTLY_REFRESH_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_nightly_refresh_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
 
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -143,6 +153,17 @@ jobs:
       - name: Push llms.txt generator image
         run: docker push "${LLMS_TXT_GENERATOR_IMAGE_URI}"
 
+      - name: Build nightly refresh image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --file deployables/dev/lambdas/nightly_refresh/Dockerfile \
+            --tag "${NIGHTLY_REFRESH_IMAGE_URI}" \
+            .
+
+      - name: Push nightly refresh image
+        run: docker push "${NIGHTLY_REFRESH_IMAGE_URI}"
+
       - name: Plan development infrastructure
         run: terraform -chdir=infrastructure/dev plan -out=tfplan
 
@@ -163,3 +184,7 @@ jobs:
           echo "## llms.txt generator" >> "${GITHUB_STEP_SUMMARY}"
           echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw llms_txt_generator_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Image: ${LLMS_TXT_GENERATOR_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## Nightly refresh" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Schedule: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_schedule_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Image: ${NIGHTLY_REFRESH_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"

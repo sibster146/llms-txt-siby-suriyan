@@ -63,6 +63,9 @@ class SitesTable:
     def get(self, site_id: str) -> dict[str, Any] | None:
         return self.dynamodb.get_item(key={"site_id": site_id})
 
+    def list_all(self) -> list[dict[str, Any]]:
+        return self.dynamodb.scan()
+
     def mark_generation_completed(
         self,
         *,
