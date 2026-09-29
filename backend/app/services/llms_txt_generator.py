@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -14,6 +15,8 @@ from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 from app.tables.llms_txt_versions import LlmsTxtVersionsTable
 from app.tables.sites import SitesTable
+
+logger = logging.getLogger(__name__)
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 LINK_PATTERN = re.compile(r"^- \[[^\]]+\]\((?:<(?P<angle_url>[^>]+)>|(?P<url>[^)]+))\)(?:: .+)?$")
@@ -202,7 +205,15 @@ class LlmsTxtGeneratorService:
             plan = _validate_plan(raw_plan, pages, self.max_output_links)
             content = render_llms_txt(plan, pages)
             validate_llms_txt(content, {page.url for page in pages})
-        except (BedrockClientError, InvalidGenerationPlanError, ValueError, TypeError):
+        except (BedrockClientError, InvalidGenerationPlanError, ValueError, TypeError) as error:
+            logger.warning(
+                "Falling back to deterministic llms.txt generation: "
+                "site_id=%s crawl_run_id=%s error_type=%s error=%s",
+                request.site_id,
+                request.crawl_run_id,
+                type(error).__name__,
+                error,
+            )
             generation_method = "DETERMINISTIC_FALLBACK"
             plan = _deterministic_plan(root_url, pages, self.max_output_links)
             content = render_llms_txt(plan, pages)

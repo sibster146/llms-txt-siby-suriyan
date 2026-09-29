@@ -226,7 +226,7 @@ def test_generator_falls_back_when_nova_references_an_unknown_page() -> None:
     assert "page_9999" not in result.content
 
 
-def test_generator_falls_back_when_bedrock_is_unavailable() -> None:
+def test_generator_falls_back_when_bedrock_is_unavailable(caplog: Any) -> None:
     service, _, _, versions, _, _ = _service(FakeBedrockClient(fail=True))
 
     result = service.process_message(_message())
@@ -234,6 +234,7 @@ def test_generator_falls_back_when_bedrock_is_unavailable() -> None:
     assert result.generation_method == "DETERMINISTIC_FALLBACK"
     record = versions.records[("site-1", result.version_id)]
     assert record["model_id"] is None
+    assert "error_type=BedrockClientError error=unavailable" in caplog.text
 
 
 def test_generator_retry_reuses_the_existing_version() -> None:
