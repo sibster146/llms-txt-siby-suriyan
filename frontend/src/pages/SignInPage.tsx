@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from 'react'
-import { ArrowRight, LoaderCircle, LockKeyhole, Mail } from 'lucide-react'
+import { ArrowRight, LoaderCircle, LockKeyhole, Mail, UserRound } from 'lucide-react'
 import { AuthShell } from '../components/AuthShell'
-import { type AuthenticatedUser, authenticate } from '../lib/auth'
+import { type AuthenticatedUser, authenticate, authenticateGuest } from '../lib/auth'
 import { authErrorMessage } from '../lib/errors'
 
 interface SignInPageProps {
@@ -23,6 +23,7 @@ export function SignInPage({
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [guestSubmitting, setGuestSubmitting] = useState(false)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -39,6 +40,23 @@ export function SignInPage({
       setError(authErrorMessage(caughtError))
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  async function handleGuestSignIn() {
+    setError('')
+    if (!isConfigured) {
+      setError('Add the Cognito IDs to frontend/.env before using authentication.')
+      return
+    }
+
+    setGuestSubmitting(true)
+    try {
+      onSignedIn(await authenticateGuest())
+    } catch (caughtError) {
+      setError(authErrorMessage(caughtError))
+    } finally {
+      setGuestSubmitting(false)
     }
   }
 
@@ -64,9 +82,13 @@ export function SignInPage({
         </div>
         {notice && <p className="notice" role="status">{notice}</p>}
         {error && <p className="error" role="alert">{error}</p>}
-        <button className="primary-button" disabled={submitting} type="submit">
+        <button className="primary-button" disabled={submitting || guestSubmitting} type="submit">
           {submitting ? <LoaderCircle className="spin" size={18} /> : <ArrowRight size={18} />}
           Sign in
+        </button>
+        <button className="guest-button" disabled={submitting || guestSubmitting} onClick={handleGuestSignIn} type="button">
+          {guestSubmitting ? <LoaderCircle className="spin" size={18} /> : <UserRound size={18} />}
+          Continue as a Guest
         </button>
       </form>
     </AuthShell>

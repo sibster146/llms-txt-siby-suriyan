@@ -65,5 +65,6 @@ class SiteDetailResponse(BaseModel):
     created_at: str
     updated_at: str
     modified_at: str | None = None
+    latest_crawl: CrawlStatusResponse | None = None
     current_version: LlmsTxtVersionResponse | None = None
     versions: list[LlmsTxtVersionSummaryResponse]

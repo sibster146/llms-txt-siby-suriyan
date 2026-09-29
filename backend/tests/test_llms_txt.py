@@ -403,10 +403,20 @@ def test_get_site_detail_returns_current_content_and_version_history() -> None:
     ]
     versions = FakeTable(items=version_records)
     s3 = FakeS3({"llms-txt/site-1/version-2/llms.txt": "# Example\n"})
+    latest_crawl = {
+        "site_id": "site-1",
+        "crawl_run_id": "crawl-2",
+        "status": "COMPLETED",
+        "pending_page_count": 0,
+        "discovered_page_count": 12,
+        "completed_page_count": 10,
+        "failed_page_count": 2,
+        "created_at": "2026-09-28T11:00:00+00:00",
+    }
     app = _test_app(
         FakeTable(item=site),
         FakeTable(item={"user_id": "user-123", "site_id": "site-1"}),
-        FakeTable(),
+        FakeTable(item=latest_crawl),
         FakeTable(),
         versions=versions,
         s3=s3,
@@ -416,6 +426,8 @@ def test_get_site_detail_returns_current_content_and_version_history() -> None:
         response = client.get("/llms-txt/sites/site-1")
 
     assert response.status_code == 200
+    assert response.json()["latest_crawl"]["crawl_run_id"] == "crawl-2"
+    assert response.json()["latest_crawl"]["discovered_page_count"] == 12
     assert response.json()["current_version"]["version_id"] == "version-2"
     assert response.json()["current_version"]["content"] == "# Example\n"
     assert [version["version_id"] for version in response.json()["versions"]] == [

@@ -110,15 +110,22 @@ def get_site_detail(
     user_id: Annotated[str, Depends(get_current_user_id)],
     sites: Annotated[SitesTable, Depends(get_sites_table)],
     user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
+    crawl_runs: Annotated[CrawlRunsTable, Depends(get_crawl_runs_table)],
     versions: Annotated[LlmsTxtVersionsTable, Depends(get_llms_txt_versions_table)],
     s3: Annotated[S3Client, Depends(get_s3_client)],
 ) -> SiteDetailResponse:
     try:
-        if user_sites.get(user_id=user_id, site_id=site_id) is None:
+        mapping = user_sites.get(user_id=user_id, site_id=site_id)
+        if mapping is None:
             raise _site_not_found()
         site = sites.get(site_id)
         if site is None:
             raise _site_not_found()
+        crawl_run_id = str(mapping.get("last_crawl_run_id") or site["last_crawl_run_id"])
+        latest_crawl = crawl_runs.get(
+            site_id=site_id,
+            crawl_run_id=crawl_run_id,
+        )
         version_records = versions.list_for_site(site_id)
         current_version_id = site.get("current_llms_txt_version_id")
         current_record = next(
@@ -146,6 +153,7 @@ def get_site_detail(
     return SiteDetailResponse.model_validate(
         {
             **site,
+            "latest_crawl": latest_crawl,
             "current_version": current_version,
             "versions": version_records,
         }

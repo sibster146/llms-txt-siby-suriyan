@@ -1,6 +1,5 @@
 import { getAccessToken } from './auth'
-
-const apiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '')
+import { apiUrl } from './config'
 
 interface ApiError {
   detail?: string
@@ -63,6 +62,7 @@ export interface SiteDetail {
   created_at: string
   updated_at: string
   modified_at: string | null
+  latest_crawl: CrawlStatusResponse | null
   current_version: LlmsTxtVersion | null
   versions: LlmsTxtVersionSummary[]
 }

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import EmailStr, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     crawl_queue_url: str = Field(alias="CRAWL_QUEUE_URL", min_length=1)
     cognito_user_pool_id: str = Field(alias="COGNITO_USER_POOL_ID", min_length=1)
     cognito_app_client_id: str = Field(alias="COGNITO_APP_CLIENT_ID", min_length=1)
+    guest_email: EmailStr = Field(alias="GUEST_EMAIL")
+    guest_password: SecretStr = Field(alias="GUEST_PASSWORD")
     cors_origins: str = Field(alias="CORS_ORIGINS", min_length=1)
 
     @property

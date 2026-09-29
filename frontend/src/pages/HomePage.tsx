@@ -175,67 +175,77 @@ export function HomePage({ onSelectSite, onSignOut, user }: HomePageProps) {
             <p className="eyebrow">Signed in as {user.email}</p>
             <h1>Your websites</h1>
           </div>
-          <button className="primary-action" onClick={openModal} type="button">
-            <Plus size={18} />
-            New website
-          </button>
         </div>
 
-        {loadingSites ? (
-          <div className="workspace-empty" aria-label="Loading websites">
-            <LoaderCircle className="spin" size={24} />
-          </div>
-        ) : sites.length === 0 ? (
-          <div className="workspace-empty">
-            <FileText size={24} />
-            <strong>No websites yet</strong>
-          </div>
-        ) : (
-          <div className="crawl-list" aria-live="polite">
-            {sites.map((site) => {
+        <div className="site-grid" aria-live="polite">
+          <button className="site-tile new-site-tile" onClick={openModal} type="button">
+            <span className="site-tile-preview new-site-preview">
+              <span className="new-site-icon"><Plus size={26} /></span>
+            </span>
+            <span className="site-tile-footer">
+              <strong>New website</strong>
+              <span>Create an llms.txt</span>
+            </span>
+          </button>
+
+          {loadingSites ? (
+            <div className="site-tile loading-site-tile" aria-label="Loading websites">
+              <LoaderCircle className="spin" size={24} />
+            </div>
+          ) : (
+            sites.map((site) => {
               const crawl = site.latest_crawl
               const crawlStatus = crawl?.status
+              const completedCount = crawl
+                ? crawl.completed_page_count + crawl.failed_page_count
+                : 0
               return (
-                <div className="site-entry" key={site.site_id}>
-                  <a
-                    className="site-entry-link"
-                    href={`/sites/${encodeURIComponent(site.site_id)}`}
-                    onClick={(event) => {
-                      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-                      event.preventDefault()
-                      onSelectSite(site.site_id)
-                    }}
-                  >
-                    <article className="crawl-item">
-                      <div className="crawl-icon"><Globe2 size={20} /></div>
-                      <div className="crawl-primary">
-                        <strong>{site.root_url}</strong>
-                        <span>{crawl?.crawl_run_id ?? site.last_crawl_run_id}</span>
+                <a
+                  className="site-tile"
+                  href={`/sites/${encodeURIComponent(site.site_id)}`}
+                  key={site.site_id}
+                  onClick={(event) => {
+                    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+                    event.preventDefault()
+                    onSelectSite(site.site_id)
+                  }}
+                >
+                  <article className="site-tile-content">
+                    <div className="site-tile-preview">
+                      <div className="site-document-icon">
+                        <FileText size={34} />
+                        <Globe2 className="site-document-globe" size={16} />
                       </div>
                       {crawlStatus && (
                         <div className={`status-badge status-${crawlStatus.toLowerCase()}`}>
-                          {crawlStatus === 'COMPLETED' ? <CheckCircle2 size={15} /> : crawlStatus === 'FAILED' ? <AlertCircle size={15} /> : crawlStatus === 'CRAWLING_AND_PARSING' || crawlStatus === 'GENERATING' ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
+                          {crawlStatus === 'COMPLETED' ? <CheckCircle2 size={14} /> : crawlStatus === 'FAILED' ? <AlertCircle size={14} /> : crawlStatus === 'CRAWLING_AND_PARSING' || crawlStatus === 'GENERATING' ? <LoaderCircle className="spin" size={14} /> : <Clock3 size={14} />}
                           {statusLabel(crawlStatus)}
                         </div>
                       )}
-                    </article>
-                    {crawl && (
-                      <div className="crawl-counts">
-                        <span>{crawl.discovered_page_count} discovered</span>
-                        <span>{crawl.completed_page_count} completed</span>
-                        <span>{crawl.failed_page_count} failed</span>
-                      </div>
-                    )}
-                  </a>
-                </div>
+                    </div>
+                    <div className="site-tile-footer">
+                      <strong>{site.root_url}</strong>
+                      {crawl ? (
+                        <div className="site-tile-counts">
+                          <span><b>{crawl.discovered_page_count}</b> Discovered</span>
+                          <span><b>{completedCount}</b> Completed</span>
+                        </div>
+                      ) : (
+                        <span>Waiting for crawl data</span>
+                      )}
+                    </div>
+                  </article>
+                </a>
               )
-            })}
+            })
+          )}
+        </div>
+
+        {(sitesError || pollError) && (
+          <div className="workspace-messages">
             {sitesError && <p className="inline-error" role="alert">{sitesError}</p>}
             {pollError && <p className="inline-error" role="alert">{pollError}</p>}
           </div>
-        )}
-        {sitesError && sites.length === 0 && !loadingSites && (
-          <p className="error workspace-error" role="alert">{sitesError}</p>
         )}
       </section>
 

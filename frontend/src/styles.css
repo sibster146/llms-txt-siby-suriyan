@@ -356,6 +356,32 @@ label {
   opacity: 0.7;
 }
 
+.guest-button {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 10px;
+  border: 1px solid #c9d2ca;
+  border-radius: 7px;
+  color: #29332c;
+  background: #fff;
+  font-weight: 700;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.guest-button:hover:not(:disabled) {
+  border-color: #9eaea1;
+  background: #eef3ef;
+}
+
+.guest-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .back-button {
   display: block;
   margin: 22px auto 0;
@@ -436,7 +462,7 @@ input:focus-visible {
 }
 
 .workspace {
-  width: min(960px, calc(100% - 40px));
+  width: min(1080px, calc(100% - 40px));
   margin: 0 auto;
   padding: 64px 0 90px;
 }
@@ -503,67 +529,148 @@ input:focus-visible {
   font-size: 14px;
 }
 
-.crawl-list {
-  border-top: 1px solid #dce1db;
+.site-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 22px;
 }
 
-.site-entry-link {
-  display: block;
+.site-tile {
+  display: grid;
+  width: 100%;
+  height: 234px;
+  grid-template-rows: 144px 90px;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid #d6dcd6;
+  border-radius: 7px;
   color: inherit;
+  background: #fff;
   text-decoration: none;
-  transition: background 150ms ease;
+  text-align: left;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 
-.site-entry-link:hover {
-  background: #f0f3ee;
+.site-tile:hover {
+  border-color: #aab7ad;
+  box-shadow: 0 7px 20px rgb(29 47 35 / 10%);
+  transform: translateY(-2px);
 }
 
-.site-entry-link:focus-visible {
+.site-tile:focus-visible {
   position: relative;
   z-index: 1;
+  outline: 3px solid rgb(23 108 67 / 22%);
+  outline-offset: 2px;
 }
 
-.crawl-item {
+.site-tile-content {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: center;
-  padding: 20px 4px;
-  border-bottom: 1px solid #dce1db;
+  min-width: 0;
+  height: 100%;
+  grid-template-rows: 144px 90px;
 }
 
-.crawl-icon {
+.site-tile-preview {
+  position: relative;
   display: grid;
-  width: 42px;
-  height: 42px;
+  min-width: 0;
   place-items: center;
-  border-radius: 7px;
+  border-bottom: 1px solid #dfe4de;
+  background: #f1f4ef;
+}
+
+.site-document-icon {
+  position: relative;
+  display: grid;
+  width: 66px;
+  height: 76px;
+  place-items: center;
+  border: 1px solid #cbd6ce;
+  border-radius: 6px;
   color: #2b6146;
+  background: #fff;
+  box-shadow: 0 3px 8px rgb(36 58 43 / 8%);
+}
+
+.site-document-globe {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  padding: 2px;
+  border-radius: 50%;
   background: #e3eee7;
 }
 
-.crawl-primary {
+.site-tile-footer {
   display: grid;
   min-width: 0;
-  gap: 5px;
+  align-content: center;
+  gap: 8px;
+  padding: 13px 15px;
+  background: #fff;
 }
 
-.crawl-primary strong,
-.crawl-primary span {
+.site-tile-footer strong,
+.site-tile-footer > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.crawl-primary strong {
+.site-tile-footer strong {
   color: #1c261f;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.crawl-primary span {
-  color: #818a82;
-  font-family: 'DM Mono', ui-monospace, monospace;
+.site-tile-footer > span {
+  color: #778078;
   font-size: 11px;
+}
+
+.site-tile-counts {
+  display: flex;
+  gap: 14px;
+  color: #6e786f;
+  font-size: 10px;
+}
+
+.site-tile-counts span {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.site-tile-counts b {
+  color: #344039;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-weight: 500;
+}
+
+.new-site-tile {
+  color: #176c43;
+}
+
+.new-site-preview {
+  background: #edf5ef;
+}
+
+.new-site-icon {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border: 1px solid #9fc6ae;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.loading-site-tile {
+  display: grid;
+  grid-template-rows: 1fr;
+  place-items: center;
+  color: #788279;
+  background: #f1f4ef;
 }
 
 .status-badge {
@@ -578,6 +685,16 @@ input:focus-visible {
   border-radius: 6px;
   font-size: 12px;
   font-weight: 700;
+}
+
+.site-tile .status-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 10px;
 }
 
 .status-pending {
@@ -605,19 +722,14 @@ input:focus-visible {
   background: #fff2ef;
 }
 
-.crawl-counts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 22px;
-  padding: 12px 4px 0 60px;
-  color: #6f7971;
+.inline-error {
+  margin: 12px 0 0;
+  color: #8e3026;
   font-size: 12px;
 }
 
-.inline-error {
-  margin: 14px 0 0 60px;
-  color: #8e3026;
-  font-size: 12px;
+.workspace-messages {
+  margin-top: 20px;
 }
 
 .detail-workspace {
@@ -672,6 +784,49 @@ input:focus-visible {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.detail-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 9px;
+}
+
+.detail-crawl-progress {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: -10px 0 24px;
+  padding: 12px 2px;
+  border-top: 1px solid #dce1db;
+  border-bottom: 1px solid #dce1db;
+}
+
+.detail-crawl-state,
+.detail-crawl-counts {
+  display: flex;
+  align-items: center;
+}
+
+.detail-crawl-state {
+  gap: 8px;
+  color: #285777;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.detail-crawl-counts {
+  gap: 22px;
+  color: #68736a;
+  font-size: 11px;
+}
+
+.detail-crawl-counts b {
+  color: #334039;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-weight: 500;
 }
 
 .llms-file {
@@ -1074,26 +1229,9 @@ input:focus-visible {
     align-items: flex-end;
   }
 
-  .primary-action {
-    width: 42px;
-    flex: 0 0 42px;
-    padding: 0;
-    font-size: 0;
-  }
-
-  .crawl-item {
-    grid-template-columns: 42px minmax(0, 1fr);
-  }
-
-  .status-badge {
-    grid-column: 2;
-    width: fit-content;
-  }
-
-  .crawl-counts,
-  .inline-error {
-    margin-left: 0;
-    padding-left: 56px;
+  .site-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
   }
 
   .modal {
@@ -1112,8 +1250,14 @@ input:focus-visible {
     font-size: 28px;
   }
 
-  .detail-heading .secondary-button {
+  .detail-heading-actions {
     margin-top: 18px;
+  }
+
+  .detail-crawl-progress {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
   }
 
   .llms-file-toolbar {

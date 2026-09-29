@@ -9,3 +9,12 @@ class SignUpRequest(BaseModel):
 class UserResponse(BaseModel):
     user_id: str
     email: EmailStr
+
+
+class GuestSessionResponse(BaseModel):
+    user_id: str
+    email: EmailStr
+    access_token: str
+    id_token: str
+    refresh_token: str
+    expires_in: int

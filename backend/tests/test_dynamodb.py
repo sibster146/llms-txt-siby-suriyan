@@ -166,6 +166,8 @@ def test_settings_build_environment_specific_table_names(
     )
     monkeypatch.setenv("COGNITO_USER_POOL_ID", "test-pool")
     monkeypatch.setenv("COGNITO_APP_CLIENT_ID", "test-client")
+    monkeypatch.setenv("GUEST_EMAIL", "guest@example.com")
+    monkeypatch.setenv("GUEST_PASSWORD", "GuestPassword1!")
     monkeypatch.setenv("CORS_ORIGINS", "http://localhost:5173")
     settings = Settings()
 

@@ -125,10 +125,43 @@ The nightly schedule is controlled by Terraform variables:
 
 Attach the permissions in `github-actions-dev-policy.json` to that deployment role. The state bucket is named `dev-llms-txt-<account-id>-terraform-state`; S3 bucket names cannot contain underscores, so this is the AWS-required exception to the resource naming convention.
 
+## Production deployment
+
+Pushes to `prod` run `.github/workflows/deploy-prod.yml`. The production workflow uses
+the same crawler, parser, generator, and nightly-refresh pipeline with `prod_` resource
+names. It additionally:
+
+1. Builds the FastAPI backend and runs it as an ECS Fargate service behind an application load balancer.
+2. Creates a private S3 bucket for the compiled React application.
+3. Creates one CloudFront distribution that serves React and proxies API paths to FastAPI.
+4. Builds React with the Terraform-managed Cognito IDs and AWS-provided CloudFront URL.
+5. Uploads the build to S3 and invalidates the CloudFront distribution.
+
+The load balancer accepts origin traffic only from the AWS-managed CloudFront prefix list.
+Fargate tasks accept port `8000` only from the load balancer security group. Production
+DynamoDB tables use point-in-time recovery and deletion protection; Cognito and the load
+balancer also use deletion protection.
+
+Create a GitHub environment named `prod` with `AWS_REGION` and
+`AWS_DEPLOY_ROLE_ARN`. Add `GUEST_EMAIL` and `GUEST_PASSWORD` as GitHub environment
+secrets, and attach `github-actions-prod-policy.json` to that OIDC role.
+All application configuration is resolved from Terraform; no Cognito IDs, resource names,
+bucket names, queue URLs, or application URLs need to be copied into GitHub variables.
+The workflow stores the guest credentials in Secrets Manager, creates the confirmed guest
+account in the production Cognito pool, and injects the two values into ECS without placing
+the password in the task definition or Terraform state.
+
+The production state bucket is named
+`prod-llms-txt-<account-id>-terraform-state`. The deployed URL is available in both the
+workflow summary and the Terraform `application_url` output.
+
 For local validation without applying infrastructure:
 
 ```bash
 terraform fmt -check -recursive infrastructure
 terraform -chdir=infrastructure/dev init -backend=false
 terraform -chdir=infrastructure/dev validate
+
+terraform -chdir=infrastructure/prod init -backend=false
+terraform -chdir=infrastructure/prod validate
 ```

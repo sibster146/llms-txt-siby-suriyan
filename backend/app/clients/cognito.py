@@ -30,6 +30,10 @@ class InvalidCognitoTokenError(CognitoClientError):
     """Raised when a Cognito access token cannot be trusted."""
 
 
+class CognitoAuthenticationError(CognitoClientError):
+    """Raised when Cognito rejects an authentication request."""
+
+
 class CognitoTokenVerifier:
     def __init__(self, settings: Settings, jwks_client: PyJWKClient | None = None) -> None:
         self._app_client_id = settings.cognito_app_client_id
@@ -72,6 +76,7 @@ class CognitoTokenVerifier:
 class CognitoClient:
     def __init__(self, settings: Settings, client: Any | None = None) -> None:
         self._user_pool_id = settings.cognito_user_pool_id
+        self._app_client_id = settings.cognito_app_client_id
         self._client = client or boto3.client("cognito-idp", region_name=settings.aws_region)
 
     def create_user(self, email: str, password: str) -> str:
@@ -109,6 +114,25 @@ class CognitoClient:
         )
         return user_id
 
+    def authenticate_user(self, email: str, password: str) -> dict[str, Any]:
+        try:
+            response = self._client.admin_initiate_auth(
+                UserPoolId=self._user_pool_id,
+                ClientId=self._app_client_id,
+                AuthFlow="ADMIN_USER_PASSWORD_AUTH",
+                AuthParameters={
+                    "USERNAME": email.strip().lower(),
+                    "PASSWORD": password,
+                },
+            )
+        except ClientError as error:
+            self._raise_client_error(error)
+
+        result = response.get("AuthenticationResult")
+        if not isinstance(result, dict) or "AccessToken" not in result:
+            raise CognitoAuthenticationError
+        return result
+
     def _delete_partial_user(self, email: str) -> None:
         with suppress(ClientError):
             self._client.admin_delete_user(
@@ -128,5 +152,13 @@ class CognitoClient:
 
         if error_code in {"LimitExceededException", "TooManyRequestsException"}:
             raise CognitoRateLimitError from error
+
+        if error_code in {
+            "NotAuthorizedException",
+            "PasswordResetRequiredException",
+            "UserNotConfirmedException",
+            "UserNotFoundException",
+        }:
+            raise CognitoAuthenticationError from error
 
         raise CognitoClientError from error

@@ -11,4 +11,6 @@ os.environ.setdefault(
 )
 os.environ.setdefault("COGNITO_USER_POOL_ID", "us-east-1_testpool")
 os.environ.setdefault("COGNITO_APP_CLIENT_ID", "test-client")
+os.environ.setdefault("GUEST_EMAIL", "guest@example.com")
+os.environ.setdefault("GUEST_PASSWORD", "GuestPassword1!")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")

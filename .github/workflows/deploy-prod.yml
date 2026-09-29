@@ -1,0 +1,221 @@
+name: Deploy Prod
+
+on:
+  push:
+    branches:
+      - prod
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Creating Infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: prod
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: terraform-prod-${{ github.run_id }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
+
+      - name: Resolve state and image locations
+        id: state
+        shell: bash
+        run: |
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "bucket=prod-llms-txt-${account_id}-terraform-state" >> "${GITHUB_OUTPUT}"
+          echo "TF_VAR_web_crawler_image_uri=${registry}/prod_llms_txt_web_crawler:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_html_parser_image_uri=${registry}/prod_llms_txt_html_parser:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_llms_txt_generator_image_uri=${registry}/prod_llms_txt_generator:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_nightly_refresh_image_uri=${registry}/prod_llms_txt_nightly_refresh:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_backend_image_uri=${registry}/prod_llms_txt_backend:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Prepare remote state
+        env:
+          STATE_BUCKET: ${{ steps.state.outputs.bucket }}
+        run: bash infrastructure/scripts/ensure-state-bucket.sh
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive infrastructure
+
+      - name: Initialize Terraform
+        run: |
+          terraform -chdir=infrastructure/prod init \
+            -reconfigure \
+            -backend-config="bucket=${{ steps.state.outputs.bucket }}" \
+            -backend-config="key=prod/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Validate Terraform
+        run: terraform -chdir=infrastructure/prod validate
+
+      - name: Provision container registries
+        run: |
+          terraform -chdir=infrastructure/prod plan \
+            -target=module.web_crawler_ecr \
+            -target=module.html_parser_ecr \
+            -target=module.llms_txt_generator_ecr \
+            -target=module.nightly_refresh_ecr \
+            -target=module.backend_ecr \
+            -target=module.guest_credentials \
+            -out=ecr.tfplan
+          terraform -chdir=infrastructure/prod apply -auto-approve ecr.tfplan
+
+      - name: Store guest credentials
+        env:
+          GUEST_EMAIL: ${{ secrets.GUEST_EMAIL }}
+          GUEST_PASSWORD: ${{ secrets.GUEST_PASSWORD }}
+        run: |
+          test -n "${GUEST_EMAIL}"
+          test -n "${GUEST_PASSWORD}"
+          secret_name=$(terraform -chdir=infrastructure/prod output -raw guest_credentials_secret_name)
+          secret_value=$(jq -cn \
+            --arg email "${GUEST_EMAIL}" \
+            --arg password "${GUEST_PASSWORD}" \
+            '{GUEST_EMAIL: $email, GUEST_PASSWORD: $password}')
+          aws secretsmanager put-secret-value \
+            --secret-id "${secret_name}" \
+            --secret-string "${secret_value}" \
+            >/dev/null
+
+      - name: Resolve image URIs
+        shell: bash
+        run: |
+          crawler=$(terraform -chdir=infrastructure/prod output -raw web_crawler_ecr_repository_url)
+          parser=$(terraform -chdir=infrastructure/prod output -raw html_parser_ecr_repository_url)
+          generator=$(terraform -chdir=infrastructure/prod output -raw llms_txt_generator_ecr_repository_url)
+          refresh=$(terraform -chdir=infrastructure/prod output -raw nightly_refresh_ecr_repository_url)
+          backend=$(terraform -chdir=infrastructure/prod output -raw backend_ecr_repository_url)
+          echo "WEB_CRAWLER_IMAGE_URI=${crawler}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "HTML_PARSER_IMAGE_URI=${parser}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "LLMS_TXT_GENERATOR_IMAGE_URI=${generator}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "NIGHTLY_REFRESH_IMAGE_URI=${refresh}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "BACKEND_IMAGE_URI=${backend}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_web_crawler_image_uri=${crawler}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_html_parser_image_uri=${parser}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_llms_txt_generator_image_uri=${generator}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_nightly_refresh_image_uri=${refresh}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_backend_image_uri=${backend}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push web crawler
+        run: |
+          docker build --platform linux/amd64 --file deployables/prod/lambdas/web_crawler/Dockerfile --tag "${WEB_CRAWLER_IMAGE_URI}" .
+          docker push "${WEB_CRAWLER_IMAGE_URI}"
+
+      - name: Build and push HTML parser
+        run: |
+          docker build --platform linux/amd64 --file deployables/prod/lambdas/html_parser/Dockerfile --tag "${HTML_PARSER_IMAGE_URI}" .
+          docker push "${HTML_PARSER_IMAGE_URI}"
+
+      - name: Build and push llms.txt generator
+        run: |
+          docker build --platform linux/amd64 --file deployables/prod/lambdas/llms_txt_generator/Dockerfile --tag "${LLMS_TXT_GENERATOR_IMAGE_URI}" .
+          docker push "${LLMS_TXT_GENERATOR_IMAGE_URI}"
+
+      - name: Build and push nightly refresh
+        run: |
+          docker build --platform linux/amd64 --file deployables/prod/lambdas/nightly_refresh/Dockerfile --tag "${NIGHTLY_REFRESH_IMAGE_URI}" .
+          docker push "${NIGHTLY_REFRESH_IMAGE_URI}"
+
+      - name: Build and push backend
+        run: |
+          docker build --platform linux/amd64 --file deployables/prod/backend/Dockerfile --tag "${BACKEND_IMAGE_URI}" .
+          docker push "${BACKEND_IMAGE_URI}"
+
+      - name: Plan production infrastructure
+        run: terraform -chdir=infrastructure/prod plan -out=tfplan
+
+      - name: Apply production infrastructure
+        run: terraform -chdir=infrastructure/prod apply -auto-approve tfplan
+
+      - name: Configure production guest user
+        env:
+          GUEST_EMAIL: ${{ secrets.GUEST_EMAIL }}
+          GUEST_PASSWORD: ${{ secrets.GUEST_PASSWORD }}
+        run: |
+          user_pool_id=$(terraform -chdir=infrastructure/prod output -raw cognito_user_pool_id)
+          if ! aws cognito-idp admin-get-user \
+            --user-pool-id "${user_pool_id}" \
+            --username "${GUEST_EMAIL}" \
+            >/dev/null 2>&1; then
+            aws cognito-idp admin-create-user \
+              --user-pool-id "${user_pool_id}" \
+              --username "${GUEST_EMAIL}" \
+              --temporary-password "${GUEST_PASSWORD}" \
+              --message-action SUPPRESS \
+              --user-attributes \
+                Name=email,Value="${GUEST_EMAIL}" \
+                Name=email_verified,Value=true \
+              >/dev/null
+          fi
+          aws cognito-idp admin-set-user-password \
+            --user-pool-id "${user_pool_id}" \
+            --username "${GUEST_EMAIL}" \
+            --password "${GUEST_PASSWORD}" \
+            --permanent \
+            >/dev/null
+
+      - name: Resolve frontend configuration
+        shell: bash
+        run: |
+          echo "VITE_API_URL=$(terraform -chdir=infrastructure/prod output -raw application_url)" >> "${GITHUB_ENV}"
+          echo "VITE_COGNITO_USER_POOL_ID=$(terraform -chdir=infrastructure/prod output -raw cognito_user_pool_id)" >> "${GITHUB_ENV}"
+          echo "VITE_COGNITO_USER_POOL_CLIENT_ID=$(terraform -chdir=infrastructure/prod output -raw cognito_web_client_id)" >> "${GITHUB_ENV}"
+          echo "FRONTEND_BUCKET=$(terraform -chdir=infrastructure/prod output -raw frontend_bucket_name)" >> "${GITHUB_ENV}"
+          echo "CLOUDFRONT_DISTRIBUTION_ID=$(terraform -chdir=infrastructure/prod output -raw cloudfront_distribution_id)" >> "${GITHUB_ENV}"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish frontend
+        run: aws s3 sync frontend/dist "s3://${FRONTEND_BUCKET}" --delete
+
+      - name: Invalidate CloudFront cache
+        run: aws cloudfront create-invalidation --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" --paths '/*'
+
+      - name: Publish deployment summary
+        run: |
+          echo "## Production deployment" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Application: $(terraform -chdir=infrastructure/prod output -raw application_url)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "ECS cluster: $(terraform -chdir=infrastructure/prod output -raw backend_ecs_cluster_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "ECS service: $(terraform -chdir=infrastructure/prod output -raw backend_ecs_service_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "CloudFront distribution: ${CLOUDFRONT_DISTRIBUTION_ID}" >> "${GITHUB_STEP_SUMMARY}"
