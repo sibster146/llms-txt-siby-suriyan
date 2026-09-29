@@ -1,0 +1,190 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches:
+      - dev
+      - 'feature/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Creating Infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: terraform-dev-${{ github.run_id }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
+
+      - name: Resolve state bucket
+        id: state
+        shell: bash
+        run: |
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          bucket="dev-llms-txt-${account_id}-terraform-state"
+          crawler_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_web_crawler"
+          parser_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_html_parser"
+          generator_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_generator"
+          refresh_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_nightly_refresh"
+          echo "bucket=${bucket}" >> "${GITHUB_OUTPUT}"
+          echo "TF_VAR_web_crawler_image_uri=${crawler_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_html_parser_image_uri=${parser_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_llms_txt_generator_image_uri=${generator_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_nightly_refresh_image_uri=${refresh_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Prepare remote state
+        env:
+          STATE_BUCKET: ${{ steps.state.outputs.bucket }}
+        run: bash infrastructure/scripts/ensure-state-bucket.sh
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive infrastructure
+
+      - name: Initialize Terraform
+        run: |
+          terraform -chdir=infrastructure/dev init \
+            -reconfigure \
+            -backend-config="bucket=${{ steps.state.outputs.bucket }}" \
+            -backend-config="key=dev/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Validate Terraform
+        run: terraform -chdir=infrastructure/dev validate
+
+      - name: Provision Lambda container registries
+        run: |
+          terraform -chdir=infrastructure/dev plan \
+            -target=module.web_crawler_ecr \
+            -target=module.html_parser_ecr \
+            -target=module.llms_txt_generator_ecr \
+            -target=module.nightly_refresh_ecr \
+            -out=ecr.tfplan
+          terraform -chdir=infrastructure/dev apply -auto-approve ecr.tfplan
+
+      - name: Resolve web crawler image URI
+        shell: bash
+        run: |
+          repository=$(terraform -chdir=infrastructure/dev output -raw web_crawler_ecr_repository_url)
+          echo "WEB_CRAWLER_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_web_crawler_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Resolve HTML parser image URI
+        shell: bash
+        run: |
+          repository=$(terraform -chdir=infrastructure/dev output -raw html_parser_ecr_repository_url)
+          echo "HTML_PARSER_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_html_parser_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Resolve llms.txt generator image URI
+        shell: bash
+        run: |
+          repository=$(terraform -chdir=infrastructure/dev output -raw llms_txt_generator_ecr_repository_url)
+          echo "LLMS_TXT_GENERATOR_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_llms_txt_generator_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Resolve nightly refresh image URI
+        shell: bash
+        run: |
+          repository=$(terraform -chdir=infrastructure/dev output -raw nightly_refresh_ecr_repository_url)
+          echo "NIGHTLY_REFRESH_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "TF_VAR_nightly_refresh_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build web crawler image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --file deployables/dev/lambdas/web_crawler/Dockerfile \
+            --tag "${WEB_CRAWLER_IMAGE_URI}" \
+            .
+
+      - name: Push web crawler image
+        run: docker push "${WEB_CRAWLER_IMAGE_URI}"
+
+      - name: Build HTML parser image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --file deployables/dev/lambdas/html_parser/Dockerfile \
+            --tag "${HTML_PARSER_IMAGE_URI}" \
+            .
+
+      - name: Push HTML parser image
+        run: docker push "${HTML_PARSER_IMAGE_URI}"
+
+      - name: Build llms.txt generator image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --file deployables/dev/lambdas/llms_txt_generator/Dockerfile \
+            --tag "${LLMS_TXT_GENERATOR_IMAGE_URI}" \
+            .
+
+      - name: Push llms.txt generator image
+        run: docker push "${LLMS_TXT_GENERATOR_IMAGE_URI}"
+
+      - name: Build nightly refresh image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --file deployables/dev/lambdas/nightly_refresh/Dockerfile \
+            --tag "${NIGHTLY_REFRESH_IMAGE_URI}" \
+            .
+
+      - name: Push nightly refresh image
+        run: docker push "${NIGHTLY_REFRESH_IMAGE_URI}"
+
+      - name: Plan development infrastructure
+        run: terraform -chdir=infrastructure/dev plan -out=tfplan
+
+      - name: Apply development infrastructure
+        run: terraform -chdir=infrastructure/dev apply -auto-approve tfplan
+
+      - name: Publish Cognito outputs
+        run: |
+          echo "## Development Cognito" >> "${GITHUB_STEP_SUMMARY}"
+          echo "User pool: $(terraform -chdir=infrastructure/dev output -raw cognito_user_pool_id)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Web client: $(terraform -chdir=infrastructure/dev output -raw cognito_web_client_id)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## Web crawler" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw web_crawler_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Image: ${WEB_CRAWLER_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## HTML parser" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw html_parser_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Image: ${HTML_PARSER_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## llms.txt generator" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw llms_txt_generator_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Image: ${LLMS_TXT_GENERATOR_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## Nightly refresh" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Schedule: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_schedule_name)" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Image: ${NIGHTLY_REFRESH_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
