@@ -216,16 +216,36 @@ def test_generator_uses_nova_plan_and_persists_before_completing() -> None:
     assert runs.completed[0]["version_id"] == result.version_id
 
 
-def test_generator_falls_back_when_nova_references_an_unknown_page() -> None:
+def test_generator_ignores_unknown_and_duplicate_pages_in_nova_plan() -> None:
     plan = _valid_plan()
     plan["sections"][0]["entries"][0]["page_id"] = "page_9999"
+    plan["sections"][1]["entries"].append(
+        {
+            "page_id": "page_0001",
+            "title": "Duplicate home",
+            "description": "A duplicate entry.",
+        }
+    )
+    service, _, _, _, _, _ = _service(FakeBedrockClient(plan))
+
+    result = service.process_message(_message())
+
+    assert result.generation_method == "AMAZON_NOVA_PRO"
+    assert result.content.count("https://example.com/") == 1
+    assert "page_9999" not in result.content
+
+
+def test_generator_falls_back_when_nova_plan_has_no_valid_pages() -> None:
+    plan = _valid_plan()
+    for section in plan["sections"]:
+        for entry in section["entries"]:
+            entry["page_id"] = "page_9999"
     service, _, _, _, _, _ = _service(FakeBedrockClient(plan))
 
     result = service.process_message(_message())
 
     assert result.generation_method == "DETERMINISTIC_FALLBACK"
     assert "https://example.com/docs/start" in result.content
-    assert "page_9999" not in result.content
 
 
 def test_generator_falls_back_when_bedrock_is_unavailable(caplog: Any) -> None:
@@ -273,14 +293,14 @@ def test_deterministic_fallback_applies_editorial_constraints() -> None:
         ],
     ]
 
-    plan = _deterministic_plan("https://example.com/", pages, max_output_links=50)
+    plan = _deterministic_plan("https://example.com/", pages, max_output_links=30)
     entries = [entry for section in plan.sections for entry in section.entries]
 
     assert len(plan.site_name) <= 80
     assert "Third is excluded" not in plan.summary
     assert len(plan.summary) <= 320
     assert len(plan.sections) <= 8
-    assert len(entries) == 50
+    assert len(entries) == 30
     assert all(entry.page_id != "page_login" for entry in entries)
     assert all(len(entry.title) <= 100 for entry in entries)
     assert all(len(entry.description) <= 200 for entry in entries)

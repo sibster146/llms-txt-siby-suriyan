@@ -28,7 +28,13 @@ variable "llms_txt_generator_image_uri" {
 variable "parser_max_attempts" {
   description = "Maximum parser deliveries before a message reaches the DLQ."
   type        = number
-  default     = 5
+  default     = 2
+}
+
+variable "parser_retry_delay_seconds" {
+  description = "Delay before a failed parser message is delivered again."
+  type        = number
+  default     = 30
 }
 
 variable "parser_max_depth" {
@@ -76,7 +82,7 @@ variable "generator_max_input_pages" {
 variable "generator_max_output_links" {
   description = "Maximum curated links allowed in the generated llms.txt."
   type        = number
-  default     = 50
+  default     = 30
 }
 
 variable "generator_max_excerpt_chars" {
@@ -88,7 +94,7 @@ variable "generator_max_excerpt_chars" {
 variable "generator_max_model_tokens" {
   description = "Maximum tokens returned by Amazon Bedrock."
   type        = number
-  default     = 5000
+  default     = 4000
 }
 
 variable "generator_maximum_concurrency" {

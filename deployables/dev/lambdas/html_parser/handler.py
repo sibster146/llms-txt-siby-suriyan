@@ -26,6 +26,12 @@ from app.tables.crawl_runs import CrawlRunsTable
 
 
 @lru_cache
+def _sqs_client() -> Any:
+    region = _required_env("AWS_REGION")
+    return boto3.Session(region_name=region).client("sqs", region_name=region)
+
+
+@lru_cache
 def _html_parser_service() -> HtmlParserService:
     region = _required_env("AWS_REGION")
     session = boto3.Session(region_name=region)
@@ -50,6 +56,14 @@ def _html_parser_service() -> HtmlParserService:
         max_links_per_page=int(_required_env("PARSER_MAX_LINKS_PER_PAGE")),
         max_discovered_pages=int(_required_env("PARSER_MAX_DISCOVERED_PAGES")),
         max_attempts=int(_required_env("PARSER_MAX_ATTEMPTS")),
+    )
+
+
+def _schedule_retry(record: dict[str, Any]) -> None:
+    _sqs_client().change_message_visibility(
+        QueueUrl=_required_env("PARSE_QUEUE_URL"),
+        ReceiptHandle=record["receiptHandle"],
+        VisibilityTimeout=int(_required_env("PARSER_RETRY_DELAY_SECONDS")),
     )
 
 
@@ -86,6 +100,19 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     }
                 )
             )
+            try:
+                _schedule_retry(record)
+            except Exception as visibility_error:
+                print(
+                    json.dumps(
+                        {
+                            "level": "error",
+                            "message": "Failed to schedule parser message retry",
+                            "message_id": record.get("messageId", ""),
+                            "error": str(visibility_error),
+                        }
+                    )
+                )
             batch_item_failures.append({"itemIdentifier": record.get("messageId", "")})
 
     return {"batchItemFailures": batch_item_failures}

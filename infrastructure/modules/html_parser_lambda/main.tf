@@ -112,6 +112,8 @@ resource "aws_lambda_function" "this" {
       CRAWL_QUEUE_URL             = var.crawl_queue_url
       LLM_TXT_QUEUE_URL           = var.llm_txt_queue_url
       PARSER_MAX_ATTEMPTS         = tostring(var.max_attempts)
+      PARSER_RETRY_DELAY_SECONDS  = tostring(var.retry_delay_seconds)
+      PARSE_QUEUE_URL             = var.parse_queue_url
       PARSER_MAX_DEPTH            = tostring(var.max_depth)
       PARSER_MAX_DISCOVERED_PAGES = tostring(var.max_discovered_pages)
       PARSER_MAX_LINKS_PER_PAGE   = tostring(var.max_links_per_page)

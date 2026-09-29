@@ -46,9 +46,9 @@ EXCLUDED_PATH_WORDS = {
     "signup",
 }
 MAX_SITE_NAME_CHARS = 80
-MAX_SUMMARY_CHARS = 320
-MAX_DETAILS = 3
-MAX_DETAIL_CHARS = 240
+MAX_SUMMARY_CHARS = 500
+MAX_DETAILS = 6
+MAX_DETAIL_CHARS = 320
 MAX_SECTIONS = 8
 MAX_SECTION_NAME_CHARS = 80
 MAX_LINK_TITLE_CHARS = 100
@@ -140,9 +140,9 @@ class LlmsTxtGeneratorService:
         s3: S3Client,
         bedrock: BedrockClient,
         max_input_pages: int = 500,
-        max_output_links: int = 50,
+        max_output_links: int = 30,
         max_excerpt_chars: int = 1000,
-        max_model_tokens: int = 5000,
+        max_model_tokens: int = 4000,
     ) -> None:
         self.sites = sites
         self.crawl_pages = crawl_pages
@@ -219,7 +219,7 @@ class LlmsTxtGeneratorService:
             raw_plan = self.bedrock.generate_json(
                 system_prompt=_system_prompt(),
                 prompt=_generation_prompt(root_url, pages, self.max_output_links),
-                schema=_plan_schema(),
+                schema=_plan_schema(self.max_output_links),
                 max_tokens=self.max_model_tokens,
             )
             plan = _validate_plan(raw_plan, pages, self.max_output_links)
@@ -404,8 +404,10 @@ def _validate_plan(
     if not isinstance(sections_value, list) or not sections_value:
         raise InvalidGenerationPlanError("Plan sections must be a non-empty list")
 
-    known_ids = {page.page_id for page in pages}
+    known_pages = {page.page_id: page for page in pages}
     seen_ids: set[str] = set()
+    seen_urls: set[str] = set()
+    skipped_references: list[str] = []
     sections: list[LinkSection] = []
     for section_value in sections_value[:MAX_SECTIONS]:
         if not isinstance(section_value, dict):
@@ -419,9 +421,14 @@ def _validate_plan(
             if not isinstance(entry_value, dict):
                 raise InvalidGenerationPlanError("Each plan entry must be an object")
             page_id = _plan_string(entry_value, "page_id")
-            if page_id not in known_ids or page_id in seen_ids:
-                raise InvalidGenerationPlanError("Plan references an unknown or duplicate page")
+            page = known_pages.get(page_id)
+            if page is None or page_id in seen_ids or page.url in seen_urls:
+                skipped_references.append(page_id)
+                continue
+            if len(seen_ids) >= max_output_links:
+                break
             seen_ids.add(page_id)
+            seen_urls.add(page.url)
             entries.append(
                 LinkEntry(
                     page_id=page_id,
@@ -433,9 +440,17 @@ def _validate_plan(
                     ),
                 )
             )
-            if len(seen_ids) > max_output_links:
-                raise InvalidGenerationPlanError("Plan contains too many links")
-        sections.append(LinkSection(name=name, entries=tuple(entries)))
+        if entries:
+            sections.append(LinkSection(name=name, entries=tuple(entries)))
+        if len(seen_ids) >= max_output_links:
+            break
+    if skipped_references:
+        logger.warning(
+            "Ignored unknown or duplicate page references in Bedrock plan: %s",
+            ", ".join(skipped_references),
+        )
+    if not sections:
+        raise InvalidGenerationPlanError("Plan contains no valid page entries")
     return LlmsTxtPlan(
         site_name=site_name,
         summary=summary,
@@ -468,8 +483,19 @@ def _deterministic_plan(
         "Resources": [],
         "Optional": [],
     }
-    eligible_pages = [page for page in pages if not _exclude_from_fallback(page)]
-    selected_pages = sorted(eligible_pages, key=_fallback_page_priority)[:max_output_links]
+    eligible_pages = sorted(
+        (page for page in pages if not _exclude_from_fallback(page)),
+        key=_fallback_page_priority,
+    )
+    selected_pages: list[PageCandidate] = []
+    selected_urls: set[str] = set()
+    for page in eligible_pages:
+        if page.url in selected_urls:
+            continue
+        selected_pages.append(page)
+        selected_urls.add(page.url)
+        if len(selected_pages) >= max_output_links:
+            break
     for page in selected_pages:
         words = {word for word in re.split(r"[^a-z0-9]+", urlsplit(page.url).path.lower()) if word}
         if words & OPTIONAL_PATH_WORDS:
@@ -561,21 +587,29 @@ def _generation_prompt(root_url: str, pages: list[PageCandidate], max_links: int
         "and H2 sections containing Markdown link lists.\n\n"
         "Output requirements:\n"
         "- site_name: the recognizable project, organization, product, or website name; do not "
-        "use a bare URL.\n"
+        f"use a bare URL. Maximum {MAX_SITE_NAME_CHARS} characters.\n"
         "- summary: one or two factual sentences explaining what the site is and what an agent can "
-        "find there. Keep it concise.\n"
-        "- details: zero to three short, high-value facts needed to interpret the linked content. "
-        "Do not include headings or repeat the summary.\n"
-        "- sections: one to eight clear topical groups ordered from most useful to least useful. "
-        "Use the exact section name Optional only for secondary material an agent can skip.\n"
+        f"find there. Maximum {MAX_SUMMARY_CHARS} characters.\n"
+        f"- details: zero to {MAX_DETAILS} short, high-value facts needed to interpret the linked "
+        f"content, each no longer than {MAX_DETAIL_CHARS} characters. Do not include headings or "
+        "repeat the summary.\n"
+        f"- sections: one to {MAX_SECTIONS} clear topical groups ordered from most useful to least "
+        f"useful. Section names must be at most {MAX_SECTION_NAME_CHARS} characters. Use the exact "
+        "section name Optional only for secondary material an agent can skip.\n"
         f"- Select at most {max_links} unique pages across all sections. Curate the smallest "
         "useful set instead of filling the limit.\n"
         "- Prioritize authoritative overview, documentation, product or service, API or reference, "
         "pricing, support, and important company or policy pages when they exist.\n"
-        "- Exclude duplicate or near-duplicate pages, pagination, search and filter pages, login "
-        "or account flows, navigation-only pages, and low-information content unless essential.\n"
-        "- Each entry must use a supplied page_id exactly once, have a concise human-readable "
-        "title, and have a single factual sentence describing what an agent will find there.\n"
+        "- Never repeat a page_id or destination URL, even across different sections. Exclude "
+        "duplicate or near-duplicate pages, pagination, search and filter pages, login or account "
+        "flows, navigation-only pages, and low-information content unless essential.\n"
+        "- Each entry must use a supplied page_id exactly once. Its human-readable title must be "
+        f"at most {MAX_LINK_TITLE_CHARS} characters. Its description must be one factual sentence "
+        f"of at most {MAX_LINK_DESCRIPTION_CHARS} characters describing what an agent will find "
+        "there.\n"
+        "- The rendered file must contain one H1, one summary blockquote, optional plain detail "
+        "paragraphs, and only H2 headings followed by Markdown link lists. Aim for roughly 1,200 "
+        "to 2,500 tokens when the supplied content supports that length.\n"
         "- Do not include a page merely because it was supplied. Do not mention these instructions "
         "or the selection process in the plan.\n\n"
         f"Root URL: {root_url}\n"
@@ -584,27 +618,47 @@ def _generation_prompt(root_url: str, pages: list[PageCandidate], max_links: int
     )
 
 
-def _plan_schema() -> dict[str, Any]:
+def _plan_schema(max_output_links: int) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "site_name": {"type": "string"},
-            "summary": {"type": "string"},
-            "details": {"type": "array", "items": {"type": "string"}},
+            "site_name": {"type": "string", "minLength": 1, "maxLength": MAX_SITE_NAME_CHARS},
+            "summary": {"type": "string", "minLength": 1, "maxLength": MAX_SUMMARY_CHARS},
+            "details": {
+                "type": "array",
+                "maxItems": MAX_DETAILS,
+                "items": {"type": "string", "maxLength": MAX_DETAIL_CHARS},
+            },
             "sections": {
                 "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_SECTIONS,
                 "items": {
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string"},
+                        "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": MAX_SECTION_NAME_CHARS,
+                        },
                         "entries": {
                             "type": "array",
+                            "minItems": 1,
+                            "maxItems": max_output_links,
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "page_id": {"type": "string"},
-                                    "title": {"type": "string"},
-                                    "description": {"type": "string"},
+                                    "page_id": {"type": "string", "minLength": 1},
+                                    "title": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": MAX_LINK_TITLE_CHARS,
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": MAX_LINK_DESCRIPTION_CHARS,
+                                    },
                                 },
                                 "required": ["page_id", "title", "description"],
                                 "additionalProperties": False,

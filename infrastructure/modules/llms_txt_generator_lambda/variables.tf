@@ -136,7 +136,7 @@ variable "max_input_pages" {
 variable "max_output_links" {
   description = "Maximum curated links allowed in the generated llms.txt."
   type        = number
-  default     = 50
+  default     = 30
 
   validation {
     condition     = var.max_output_links >= 1
@@ -158,7 +158,7 @@ variable "max_excerpt_chars" {
 variable "max_model_tokens" {
   description = "Maximum tokens Bedrock may return."
   type        = number
-  default     = 5000
+  default     = 4000
 
   validation {
     condition     = var.max_model_tokens >= 1

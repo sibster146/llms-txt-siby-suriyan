@@ -52,7 +52,7 @@ variable "llm_txt_visibility_timeout_seconds" {
 variable "max_receive_count" {
   description = "Number of failed parser receives before a message moves to its dead-letter queue."
   type        = number
-  default     = 5
+  default     = 2
 }
 
 variable "crawl_max_receive_count" {

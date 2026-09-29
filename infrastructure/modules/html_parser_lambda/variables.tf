@@ -24,6 +24,11 @@ variable "parse_queue_arn" {
   description = "ARN of the queue that triggers the parser."
 }
 
+variable "parse_queue_url" {
+  type        = string
+  description = "URL of the queue that triggers the parser."
+}
+
 variable "crawl_queue_arn" {
   type        = string
   description = "ARN of the crawler queue."
@@ -106,7 +111,13 @@ variable "max_discovered_pages" {
 variable "max_attempts" {
   type        = number
   description = "Number of parser deliveries before the message reaches its DLQ."
-  default     = 5
+  default     = 2
+}
+
+variable "retry_delay_seconds" {
+  type        = number
+  description = "Delay before a failed parser message becomes visible for retry."
+  default     = 30
 }
 
 variable "memory_size" {

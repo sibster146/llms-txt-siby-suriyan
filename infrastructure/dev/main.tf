@@ -21,6 +21,7 @@ module "sqs" {
 
   environment                        = "dev"
   project_name                       = var.project_name
+  max_receive_count                  = var.parser_max_attempts
   crawl_visibility_timeout_seconds   = 30
   crawl_max_receive_count            = 4
   llm_txt_visibility_timeout_seconds = 1800
@@ -104,6 +105,8 @@ module "html_parser_lambda" {
   application_bucket_arn  = module.s3.bucket_arn
   parser_version          = "v1"
   max_attempts            = var.parser_max_attempts
+  retry_delay_seconds     = var.parser_retry_delay_seconds
+  parse_queue_url         = module.sqs.queue_urls.parse
   max_depth               = var.parser_max_depth
   max_discovered_pages    = var.parser_max_discovered_pages
   max_links_per_page      = var.parser_max_links_per_page
