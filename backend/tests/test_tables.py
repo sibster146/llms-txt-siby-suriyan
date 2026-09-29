@@ -100,6 +100,7 @@ def test_crawl_runs_table_creates_initial_counts() -> None:
     assert dynamodb.put_items[0]["status"] == "PENDING"
     assert dynamodb.put_items[0]["pending_page_count"] == 1
     assert dynamodb.put_items[0]["discovered_page_count"] == 1
+    assert "force" not in dynamodb.put_items[0]
 
 
 def test_crawl_pages_table_creates_a_page() -> None:
@@ -248,9 +249,11 @@ def test_llms_txt_versions_table_creates_a_version() -> None:
         crawl_run_id="crawl-1",
         s3_key="llms-txt/site-1/version-1/llms.txt",
         content_hash="hash-1",
+        crawl_content_hash="crawl-hash-1",
         generated_at="2026-09-27T00:00:00+00:00",
     )
 
     assert dynamodb.put_items[0]["version_id"] == "version-1"
     assert dynamodb.put_items[0]["llms_txt_s3_key"].endswith("/llms.txt")
+    assert dynamodb.put_items[0]["crawl_content_hash"] == "crawl-hash-1"
     assert dynamodb.put_items[0]["status"] == "CURRENT"

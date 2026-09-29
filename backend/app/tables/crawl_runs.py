@@ -17,7 +17,6 @@ class CrawlRunsTable:
         site_id: str,
         crawl_run_id: str,
         created_at: str,
-        force: bool = False,
         initial_page_count: int = 1,
     ) -> None:
         self.dynamodb.put_item(
@@ -29,7 +28,6 @@ class CrawlRunsTable:
                 "discovered_page_count": initial_page_count,
                 "completed_page_count": 0,
                 "failed_page_count": 0,
-                "force": force,
                 "created_at": created_at,
             }
         )
@@ -61,18 +59,21 @@ class CrawlRunsTable:
         site_id: str,
         crawl_run_id: str,
         version_id: str,
+        crawl_content_hash: str,
         generated_at: str,
     ) -> None:
         self.dynamodb.update_item(
             key={"site_id": site_id, "crawl_run_id": crawl_run_id},
             update_expression=(
                 "SET #status = :status, llms_txt_version_id = :version_id, "
+                "crawl_content_hash = :crawl_content_hash, "
                 "generated_at = :generated_at, updated_at = :generated_at"
             ),
             expression_attribute_names={"#status": "status"},
             expression_attribute_values={
                 ":status": "COMPLETED",
                 ":version_id": version_id,
+                ":crawl_content_hash": crawl_content_hash,
                 ":generated_at": generated_at,
             },
         )

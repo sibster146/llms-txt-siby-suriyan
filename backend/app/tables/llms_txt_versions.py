@@ -19,6 +19,7 @@ class LlmsTxtVersionsTable:
         crawl_run_id: str,
         s3_key: str,
         content_hash: str,
+        crawl_content_hash: str,
         generated_at: str,
         generation_method: str | None = None,
         model_id: str | None = None,
@@ -30,6 +31,7 @@ class LlmsTxtVersionsTable:
             "crawl_run_id": crawl_run_id,
             "llms_txt_s3_key": s3_key,
             "content_hash": content_hash,
+            "crawl_content_hash": crawl_content_hash,
             "status": version_status,
             "generated_at": generated_at,
         }

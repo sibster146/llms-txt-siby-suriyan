@@ -170,11 +170,11 @@ class LlmsTxtGeneratorService:
             raise LlmsTxtGeneratorError("Crawl run is not ready for generation")
 
         if crawl_run.get("status") == "COMPLETED":
-            crawl_created_at = _required_record_string(crawl_run, "created_at")
-            version_id = _version_id(crawl_created_at, request.crawl_run_id)
-            if self.versions.get(site_id=request.site_id, version_id=version_id) is None:
+            version_id = _required_record_string(crawl_run, "llms_txt_version_id")
+            version = self.versions.get(site_id=request.site_id, version_id=version_id)
+            if version is None:
                 raise LlmsTxtGeneratorError("Completed crawl run does not have a generated version")
-            return self._generate(request, site, crawl_run)
+            return self._result_from_version(request, version)
 
         return self._generate(request, site, crawl_run)
 
@@ -189,28 +189,49 @@ class LlmsTxtGeneratorService:
         s3_key = f"llms-txt/{request.site_id}/{version_id}/llms.txt"
         existing = self.versions.get(site_id=request.site_id, version_id=version_id)
         if existing is not None:
-            content = self.s3.get_text(str(existing["llms_txt_s3_key"]))
+            crawl_content_hash = str(existing.get("crawl_content_hash") or "")
+            if not crawl_content_hash:
+                crawl_content_hash = _crawl_content_hash(
+                    self.crawl_pages.list_for_run(request.crawl_run_id)
+                )
             existing_generated_at = str(
                 existing.get("generated_at") or datetime.now(UTC).isoformat()
             )
             self._complete_records(
                 request=request,
                 version_id=version_id,
+                crawl_content_hash=crawl_content_hash,
                 generated_at=existing_generated_at,
             )
-            return GenerationResult(
-                site_id=request.site_id,
-                crawl_run_id=request.crawl_run_id,
-                version_id=version_id,
-                s3_key=str(existing["llms_txt_s3_key"]),
-                content_hash=str(existing["content_hash"]),
-                generation_method=str(existing.get("generation_method", "UNKNOWN")),
-                content=content,
-            )
+            return self._result_from_version(request, existing)
 
         generated_at = datetime.now(UTC).isoformat()
         root_url = _required_record_string(site, "root_url")
-        pages = self._load_pages(request.crawl_run_id)
+        page_records = self.crawl_pages.list_for_run(request.crawl_run_id)
+        crawl_content_hash = _crawl_content_hash(page_records)
+        current_version_id = site.get("current_llms_txt_version_id")
+        if isinstance(current_version_id, str) and current_version_id:
+            current_version = self.versions.get(
+                site_id=request.site_id,
+                version_id=current_version_id,
+            )
+            if (
+                current_version is not None
+                and current_version.get("crawl_content_hash") == crawl_content_hash
+            ):
+                previous_generated_at = _required_record_string(
+                    current_version,
+                    "generated_at",
+                )
+                self._complete_records(
+                    request=request,
+                    version_id=current_version_id,
+                    crawl_content_hash=crawl_content_hash,
+                    generated_at=previous_generated_at,
+                )
+                return self._result_from_version(request, current_version)
+
+        pages = self._load_pages(page_records)
         if not pages:
             raise LlmsTxtGeneratorError("Crawl run has no parsed pages")
 
@@ -256,6 +277,7 @@ class LlmsTxtGeneratorService:
                 "site-id": request.site_id,
                 "crawl-run-id": request.crawl_run_id,
                 "content-sha256": content_hash,
+                "crawl-content-sha256": crawl_content_hash,
                 "generation-method": generation_method.lower(),
             },
         )
@@ -265,6 +287,7 @@ class LlmsTxtGeneratorService:
             crawl_run_id=request.crawl_run_id,
             s3_key=s3_key,
             content_hash=content_hash,
+            crawl_content_hash=crawl_content_hash,
             generated_at=generated_at,
             generation_method=generation_method,
             model_id=self.bedrock.model_id,
@@ -272,6 +295,7 @@ class LlmsTxtGeneratorService:
         self._complete_records(
             request=request,
             version_id=version_id,
+            crawl_content_hash=crawl_content_hash,
             generated_at=generated_at,
         )
         return GenerationResult(
@@ -284,10 +308,10 @@ class LlmsTxtGeneratorService:
             content=content,
         )
 
-    def _load_pages(self, crawl_run_id: str) -> list[PageCandidate]:
+    def _load_pages(self, page_records: list[dict[str, Any]]) -> list[PageCandidate]:
         records = [
             page
-            for page in self.crawl_pages.list_for_run(crawl_run_id)
+            for page in page_records
             if page.get("status") == "PARSED" and page.get("parsed_content_s3_key")
         ]
         records.sort(key=lambda page: (int(page.get("depth", 0)), str(page.get("url", ""))))
@@ -316,11 +340,28 @@ class LlmsTxtGeneratorService:
             )
         return pages
 
+    def _result_from_version(
+        self,
+        request: GenerationRequest,
+        version: dict[str, Any],
+    ) -> GenerationResult:
+        s3_key = _required_record_string(version, "llms_txt_s3_key")
+        return GenerationResult(
+            site_id=request.site_id,
+            crawl_run_id=request.crawl_run_id,
+            version_id=_required_record_string(version, "version_id"),
+            s3_key=s3_key,
+            content_hash=_required_record_string(version, "content_hash"),
+            generation_method=str(version.get("generation_method", "UNKNOWN")),
+            content=self.s3.get_text(s3_key),
+        )
+
     def _complete_records(
         self,
         *,
         request: GenerationRequest,
         version_id: str,
+        crawl_content_hash: str,
         generated_at: str,
     ) -> None:
         self.sites.mark_generation_completed(
@@ -333,6 +374,7 @@ class LlmsTxtGeneratorService:
             site_id=request.site_id,
             crawl_run_id=request.crawl_run_id,
             version_id=version_id,
+            crawl_content_hash=crawl_content_hash,
             generated_at=generated_at,
         )
 
@@ -777,6 +819,22 @@ def _plan_schema(max_output_links: int) -> dict[str, Any]:
 def _version_id(generated_at: str, crawl_run_id: str) -> str:
     timestamp = re.sub(r"[^0-9]", "", generated_at)[:20]
     return f"version_{timestamp}_{crawl_run_id.removeprefix('crawl_')}"
+
+
+def _crawl_content_hash(page_records: list[dict[str, Any]]) -> str:
+    manifest = [
+        {
+            "canonical_url": str(page.get("canonical_url") or page.get("url") or ""),
+            "canonical_url_hash": str(page.get("canonical_url_hash") or ""),
+            "parsed_content_s3_key": str(page.get("parsed_content_s3_key") or ""),
+            "raw_html_hash": str(page.get("raw_html_hash") or ""),
+            "status": str(page.get("status") or ""),
+        }
+        for page in page_records
+    ]
+    manifest.sort(key=lambda page: (page["canonical_url_hash"], page["canonical_url"]))
+    serialized = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    return sha256(serialized.encode()).hexdigest()
 
 
 def _heading_texts(value: Any) -> list[str]:

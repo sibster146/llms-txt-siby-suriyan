@@ -45,26 +45,32 @@ class FakeCrawlRunsTable:
     def mark_generation_completed(self, **kwargs: Any) -> None:
         self.events.append("run")
         self.record["status"] = "COMPLETED"
+        self.record["llms_txt_version_id"] = kwargs["version_id"]
+        self.record["crawl_content_hash"] = kwargs["crawl_content_hash"]
         self.completed.append(kwargs)
 
 
 class FakeCrawlPagesTable:
     def list_for_run(self, crawl_run_id: str) -> list[dict[str, Any]]:
-        assert crawl_run_id == "crawl-1"
         return [
             {
+                "canonical_url_hash": "root-hash",
                 "status": "PARSED",
                 "url": "https://example.com/",
                 "depth": 0,
+                "raw_html_hash": "root-content-hash",
                 "parsed_content_s3_key": "parsed/root.json",
             },
             {
+                "canonical_url_hash": "docs-hash",
                 "status": "PARSED",
                 "url": "https://example.com/docs/start",
                 "depth": 1,
+                "raw_html_hash": "docs-content-hash",
                 "parsed_content_s3_key": "parsed/docs.json",
             },
             {
+                "canonical_url_hash": "broken-hash",
                 "status": "FAILED",
                 "url": "https://example.com/broken",
                 "depth": 1,
@@ -226,6 +232,7 @@ def test_generator_persists_kimi_output_before_completing() -> None:
     assert versions.records[("site-1", result.version_id)]["model_id"] == (
         "us.moonshotai.kimi-k3"
     )
+    assert versions.records[("site-1", result.version_id)]["crawl_content_hash"]
     assert sites.completed[0]["version_id"] == result.version_id
     assert runs.completed[0]["version_id"] == result.version_id
 
@@ -319,8 +326,39 @@ def test_generator_retry_reuses_the_existing_version() -> None:
     assert second.content == first.content
     assert second.version_id == first.version_id
     assert bedrock.calls == 1
-    assert events == ["site", "run"]
+    assert events == []
     assert runs.record["status"] == "COMPLETED"
+
+
+def test_generator_reuses_current_version_when_crawl_content_is_unchanged() -> None:
+    bedrock = FakeBedrockClient(_valid_content())
+    service, sites, runs, versions, _, events = _service(bedrock)
+    first = service.process_message(_message())
+    first_version_count = len(versions.records)
+
+    sites.record["current_llms_txt_version_id"] = first.version_id
+    runs.record = {
+        "site_id": "site-1",
+        "crawl_run_id": "crawl-2",
+        "status": "GENERATING",
+        "created_at": "2026-09-29T12:34:56+00:00",
+    }
+    events.clear()
+
+    second = service.process_message(
+        {
+            "action": "generate_llms_txt",
+            "payload": {"site_id": "site-1", "crawl_run_id": "crawl-2"},
+        }
+    )
+
+    assert second.version_id == first.version_id
+    assert second.s3_key == first.s3_key
+    assert second.content == first.content
+    assert bedrock.calls == 1
+    assert len(versions.records) == first_version_count
+    assert events == ["site", "run"]
+    assert runs.completed[-1]["version_id"] == first.version_id
 
 
 def test_generator_rejects_an_invalid_queue_message() -> None:

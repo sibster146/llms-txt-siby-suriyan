@@ -6,6 +6,11 @@ Bedrock's Moonshot AI Kimi K3 model for the complete `llms.txt`, and stores the 
 response unchanged. Output validation and deterministic fallback remain disabled; model
 or API failures follow the normal queue retry path.
 
+Before calling Bedrock, the generator hashes a sorted manifest of the crawl's page URLs,
+parse statuses, raw-content hashes, and parsed S3 keys. If that hash matches the site's
+current version, the crawl reuses that version without invoking Bedrock or writing a new
+S3 object or DynamoDB version record.
+
 Unexpected processing failures are requeued with a 30-second delivery delay. The
 message carries its attempt number and is sent to `llm_txt_dlq` after four failed
 attempts. If scheduling the retry fails, the original message remains unacknowledged.
