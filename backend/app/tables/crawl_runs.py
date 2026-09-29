@@ -165,7 +165,6 @@ class CrawlRunsTable:
                 ),
                 expression_attribute_values={
                     ":one": 1,
-                    ":max_discovered_pages": max_discovered_pages,
                     ":updated_at": updated_at,
                 },
                 condition_expression=Attr("discovered_page_count").lt(max_discovered_pages),

@@ -178,7 +178,7 @@ def test_crawl_runs_table_reserves_discovery_capacity_atomically() -> None:
     assert reserved
     values = dynamodb.updates[0]["expression_attribute_values"]
     assert values[":one"] == 1
-    assert values[":max_discovered_pages"] == 1000
+    assert ":max_discovered_pages" not in values
     assert dynamodb.updates[0]["condition_expression"] is not None
 
 
