@@ -50,33 +50,37 @@ module "s3" {
 module "web_crawler_ecr" {
   source = "../modules/ecr"
 
-  environment     = "prod"
-  project_name    = var.project_name
-  repository_name = "web_crawler"
+  environment          = "prod"
+  project_name         = var.project_name
+  repository_name      = "web_crawler"
+  image_tag_mutability = "MUTABLE"
 }
 
 module "html_parser_ecr" {
   source = "../modules/ecr"
 
-  environment     = "prod"
-  project_name    = var.project_name
-  repository_name = "html_parser"
+  environment          = "prod"
+  project_name         = var.project_name
+  repository_name      = "html_parser"
+  image_tag_mutability = "MUTABLE"
 }
 
 module "llms_txt_generator_ecr" {
   source = "../modules/ecr"
 
-  environment     = "prod"
-  project_name    = var.project_name
-  repository_name = "generator"
+  environment          = "prod"
+  project_name         = var.project_name
+  repository_name      = "generator"
+  image_tag_mutability = "MUTABLE"
 }
 
 module "nightly_refresh_ecr" {
   source = "../modules/ecr"
 
-  environment     = "prod"
-  project_name    = var.project_name
-  repository_name = "nightly_refresh"
+  environment          = "prod"
+  project_name         = var.project_name
+  repository_name      = "nightly_refresh"
+  image_tag_mutability = "MUTABLE"
 }
 
 module "backend_ecr" {
