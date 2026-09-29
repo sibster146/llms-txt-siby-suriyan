@@ -44,6 +44,7 @@ def test_bedrock_client_returns_constrained_tool_input() -> None:
     assert result == {"site_name": "Example"}
     assert runtime.calls[0]["modelId"] == "amazon.nova-pro-v1:0"
     assert runtime.calls[0]["inferenceConfig"]["temperature"] == 0
+    assert runtime.calls[0]["additionalModelRequestFields"] == {"inferenceConfig": {"topK": 1}}
     assert runtime.calls[0]["toolConfig"]["toolChoice"] == {
         "tool": {"name": "create_llms_txt_plan"}
     }

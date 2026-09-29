@@ -24,25 +24,28 @@ class BedrockClient:
         max_tokens: int,
     ) -> dict[str, Any]:
         tool_name = "create_llms_txt_plan"
-        try:
-            response = self.client.converse(
-                modelId=self.model_id,
-                system=[{"text": system_prompt}],
-                messages=[{"role": "user", "content": [{"text": prompt}]}],
-                inferenceConfig={"maxTokens": max_tokens, "temperature": 0},
-                toolConfig={
-                    "tools": [
-                        {
-                            "toolSpec": {
-                                "name": tool_name,
-                                "description": "Return the curated llms.txt plan.",
-                                "inputSchema": {"json": schema},
-                            }
+        request = {
+            "modelId": self.model_id,
+            "system": [{"text": system_prompt}],
+            "messages": [{"role": "user", "content": [{"text": prompt}]}],
+            "inferenceConfig": {"maxTokens": max_tokens, "temperature": 0},
+            "toolConfig": {
+                "tools": [
+                    {
+                        "toolSpec": {
+                            "name": tool_name,
+                            "description": "Return the curated llms.txt plan.",
+                            "inputSchema": {"json": schema},
                         }
-                    ],
-                    "toolChoice": {"tool": {"name": tool_name}},
-                },
-            )
+                    }
+                ],
+                "toolChoice": {"tool": {"name": tool_name}},
+            },
+        }
+        if "amazon.nova-" in self.model_id:
+            request["additionalModelRequestFields"] = {"inferenceConfig": {"topK": 1}}
+        try:
+            response = self.client.converse(**request)
         except Exception as error:
             raise BedrockClientError(f"Bedrock generation failed: {error}") from error
 

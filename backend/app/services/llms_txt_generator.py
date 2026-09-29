@@ -33,6 +33,26 @@ PRODUCT_PATH_WORDS = {
     "solutions",
 }
 COMPANY_PATH_WORDS = {"about", "careers", "company", "contact", "news", "press", "team"}
+EXCLUDED_PATH_WORDS = {
+    "account",
+    "auth",
+    "cart",
+    "checkout",
+    "filter",
+    "login",
+    "register",
+    "search",
+    "signin",
+    "signup",
+}
+MAX_SITE_NAME_CHARS = 80
+MAX_SUMMARY_CHARS = 320
+MAX_DETAILS = 3
+MAX_DETAIL_CHARS = 240
+MAX_SECTIONS = 8
+MAX_SECTION_NAME_CHARS = 80
+MAX_LINK_TITLE_CHARS = 100
+MAX_LINK_DESCRIPTION_CHARS = 200
 
 
 class LlmsTxtGeneratorError(Exception):
@@ -373,8 +393,8 @@ def _validate_plan(
     pages: list[PageCandidate],
     max_output_links: int,
 ) -> LlmsTxtPlan:
-    site_name = _plan_string(value, "site_name")
-    summary = _plan_string(value, "summary")
+    site_name = _truncate_text(_plan_string(value, "site_name"), MAX_SITE_NAME_CHARS)
+    summary = _sentence_summary(_plan_string(value, "summary"), 2, MAX_SUMMARY_CHARS)
     details_value = value.get("details", [])
     sections_value = value.get("sections")
     if not isinstance(details_value, list) or not all(
@@ -387,10 +407,10 @@ def _validate_plan(
     known_ids = {page.page_id for page in pages}
     seen_ids: set[str] = set()
     sections: list[LinkSection] = []
-    for section_value in sections_value:
+    for section_value in sections_value[:MAX_SECTIONS]:
         if not isinstance(section_value, dict):
             raise InvalidGenerationPlanError("Each plan section must be an object")
-        name = _plan_string(section_value, "name")
+        name = _truncate_text(_plan_string(section_value, "name"), MAX_SECTION_NAME_CHARS)
         entries_value = section_value.get("entries")
         if not isinstance(entries_value, list) or not entries_value:
             raise InvalidGenerationPlanError("Each plan section must have entries")
@@ -405,8 +425,12 @@ def _validate_plan(
             entries.append(
                 LinkEntry(
                     page_id=page_id,
-                    title=_plan_string(entry_value, "title"),
-                    description=_plan_string(entry_value, "description"),
+                    title=_truncate_text(_plan_string(entry_value, "title"), MAX_LINK_TITLE_CHARS),
+                    description=_sentence_summary(
+                        _plan_string(entry_value, "description"),
+                        1,
+                        MAX_LINK_DESCRIPTION_CHARS,
+                    ),
                 )
             )
             if len(seen_ids) > max_output_links:
@@ -415,7 +439,11 @@ def _validate_plan(
     return LlmsTxtPlan(
         site_name=site_name,
         summary=summary,
-        details=tuple(_clean_text(item) for item in details_value if _clean_text(item)),
+        details=tuple(
+            _truncate_text(item, MAX_DETAIL_CHARS)
+            for item in details_value[:MAX_DETAILS]
+            if _clean_text(item)
+        ),
         sections=tuple(sections),
     )
 
@@ -427,8 +455,12 @@ def _deterministic_plan(
 ) -> LlmsTxtPlan:
     root_page = next((page for page in pages if page.depth == 0), pages[0])
     hostname = urlsplit(root_url).hostname or root_url
-    site_name = root_page.title or hostname
-    summary = root_page.description or f"Information and resources from {hostname}."
+    site_name = _truncate_text(root_page.title or hostname, MAX_SITE_NAME_CHARS)
+    summary = _sentence_summary(
+        root_page.description or f"Information and resources from {hostname}.",
+        2,
+        MAX_SUMMARY_CHARS,
+    )
     grouped: dict[str, list[PageCandidate]] = {
         "Documentation": [],
         "Products and services": [],
@@ -436,7 +468,9 @@ def _deterministic_plan(
         "Resources": [],
         "Optional": [],
     }
-    for page in pages[:max_output_links]:
+    eligible_pages = [page for page in pages if not _exclude_from_fallback(page)]
+    selected_pages = sorted(eligible_pages, key=_fallback_page_priority)[:max_output_links]
+    for page in selected_pages:
         words = {word for word in re.split(r"[^a-z0-9]+", urlsplit(page.url).path.lower()) if word}
         if words & OPTIONAL_PATH_WORDS:
             section = "Optional"
@@ -456,8 +490,12 @@ def _deterministic_plan(
             entries=tuple(
                 LinkEntry(
                     page_id=page.page_id,
-                    title=page.title,
-                    description=page.description or _heading_description(page),
+                    title=_truncate_text(page.title, MAX_LINK_TITLE_CHARS),
+                    description=_sentence_summary(
+                        page.description or _heading_description(page),
+                        1,
+                        MAX_LINK_DESCRIPTION_CHARS,
+                    ),
                 )
                 for page in section_pages
             ),
@@ -466,6 +504,30 @@ def _deterministic_plan(
         if section_pages
     )
     return LlmsTxtPlan(site_name=site_name, summary=summary, details=(), sections=sections)
+
+
+def _exclude_from_fallback(page: PageCandidate) -> bool:
+    if page.depth == 0:
+        return False
+    words = {word for word in re.split(r"[^a-z0-9]+", urlsplit(page.url).path.lower()) if word}
+    return bool(words & EXCLUDED_PATH_WORDS)
+
+
+def _fallback_page_priority(page: PageCandidate) -> tuple[int, int, str]:
+    words = {word for word in re.split(r"[^a-z0-9]+", urlsplit(page.url).path.lower()) if word}
+    if page.depth == 0:
+        priority = 0
+    elif words & DOCS_PATH_WORDS:
+        priority = 1
+    elif words & PRODUCT_PATH_WORDS:
+        priority = 2
+    elif words & COMPANY_PATH_WORDS:
+        priority = 3
+    elif words & OPTIONAL_PATH_WORDS:
+        priority = 5
+    else:
+        priority = 4
+    return priority, page.depth, page.url
 
 
 def _system_prompt() -> str:
@@ -615,6 +677,23 @@ def _clean_text(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return SPACE_PATTERN.sub(" ", value).strip()
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    text = _clean_text(value)
+    if len(text) <= max_chars:
+        return text
+    prefix = text[: max_chars - 3].rstrip()
+    boundary = prefix.rfind(" ")
+    if boundary >= max_chars // 2:
+        prefix = prefix[:boundary].rstrip()
+    return f"{prefix}..."
+
+
+def _sentence_summary(value: str, max_sentences: int, max_chars: int) -> str:
+    text = _clean_text(value)
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    return _truncate_text(" ".join(sentences[:max_sentences]), max_chars)
 
 
 def _markdown_text(value: str) -> str:
