@@ -1,0 +1,109 @@
+output "cognito_user_pool_id" {
+  description = "Development Cognito user pool ID."
+  value       = module.cognito.user_pool_id
+}
+
+output "cognito_web_client_id" {
+  description = "Development Cognito public web client ID."
+  value       = module.cognito.web_client_id
+}
+
+output "cognito_issuer" {
+  description = "Development Cognito OIDC issuer."
+  value       = module.cognito.issuer
+}
+
+output "dynamodb_table_names" {
+  description = "Development DynamoDB table names keyed by data model."
+  value       = module.dynamodb.table_names
+}
+
+output "dynamodb_table_arns" {
+  description = "Development DynamoDB table ARNs keyed by data model."
+  value       = module.dynamodb.table_arns
+}
+
+output "sqs_queue_names" {
+  description = "Development SQS queue names keyed by workflow stage."
+  value       = module.sqs.queue_names
+}
+
+output "sqs_queue_urls" {
+  description = "Development SQS queue URLs keyed by workflow stage."
+  value       = module.sqs.queue_urls
+}
+
+output "sqs_queue_arns" {
+  description = "Development SQS queue ARNs keyed by workflow stage."
+  value       = module.sqs.queue_arns
+}
+
+output "application_s3_bucket_name" {
+  description = "Development application storage bucket name."
+  value       = module.s3.bucket_name
+}
+
+output "application_s3_bucket_arn" {
+  description = "Development application storage bucket ARN."
+  value       = module.s3.bucket_arn
+}
+
+output "web_crawler_ecr_repository_url" {
+  description = "ECR repository used by the web crawler Lambda."
+  value       = module.web_crawler_ecr.repository_url
+}
+
+output "web_crawler_lambda_name" {
+  description = "Development web crawler Lambda function name."
+  value       = module.web_crawler_lambda.function_name
+}
+
+output "web_crawler_lambda_arn" {
+  description = "Development web crawler Lambda function ARN."
+  value       = module.web_crawler_lambda.function_arn
+}
+
+output "html_parser_ecr_repository_url" {
+  description = "ECR repository used by the HTML parser Lambda."
+  value       = module.html_parser_ecr.repository_url
+}
+
+output "html_parser_lambda_name" {
+  description = "Development HTML parser Lambda function name."
+  value       = module.html_parser_lambda.function_name
+}
+
+output "html_parser_lambda_arn" {
+  description = "Development HTML parser Lambda function ARN."
+  value       = module.html_parser_lambda.function_arn
+}
+
+output "llms_txt_generator_ecr_repository_url" {
+  description = "ECR repository used by the llms.txt generator Lambda."
+  value       = module.llms_txt_generator_ecr.repository_url
+}
+
+output "llms_txt_generator_lambda_name" {
+  description = "Development llms.txt generator Lambda function name."
+  value       = module.llms_txt_generator_lambda.function_name
+}
+
+output "llms_txt_generator_lambda_arn" {
+  description = "Development llms.txt generator Lambda function ARN."
+  value       = module.llms_txt_generator_lambda.function_arn
+}
+
+output "nightly_refresh_ecr_repository_url" {
+  description = "ECR repository used by the nightly refresh Lambda."
+  value       = module.nightly_refresh_ecr.repository_url
+}
+
+output "nightly_refresh_lambda_name" {
+  description = "Development nightly refresh Lambda function name."
+  value       = module.nightly_refresh_lambda.function_name
+}
+
+output "nightly_refresh_schedule_name" {
+  description = "Development nightly refresh EventBridge schedule name."
+  value       = module.nightly_refresh_lambda.schedule_name
+}
