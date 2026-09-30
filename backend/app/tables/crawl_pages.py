@@ -13,6 +13,11 @@ class CrawlPagesTable:
     """Page state and fenced writes. No persisted aggregate counters."""
 
     def __init__(self, dynamodb: DynamoDBClient) -> None:
+        """Bind the CrawlPages client during API or Lambda dependency setup.
+
+        The client targets the environment's page table. Construction performs
+        no reads or writes.
+        """
         self.dynamodb = dynamodb
 
     @staticmethod
@@ -27,6 +32,14 @@ class CrawlPagesTable:
         created_at: str,
         parent_url: str | None = None,
     ) -> dict[str, Any]:
+        """Build an unsaved QUEUED page with zero attempts and pending dispatch.
+
+        CrawlSetupService uses this for the root; child registration uses it for
+        discovered URLs. The caller supplies the canonical URL and its hash,
+        crawl/site IDs, depth, scope URL, and creation timestamp. parent_url is
+        omitted for the root. Also builds site_url_key for cross-run lookups.
+        The returned record must be persisted before it is sent to SQS.
+        """
         item = dict(
             crawl_run_id=crawl_run_id,
             canonical_url_hash=canonical_url_hash,
@@ -47,9 +60,24 @@ class CrawlPagesTable:
 
     @staticmethod
     def key(page: dict) -> dict:
+        """Extract the complete primary key from a page record without database I/O.
+
+        Worker mutations and checkpoint reads use crawl_run_id as the partition
+        key and canonical_url_hash as the sort key. Missing fields raise KeyError.
+        """
         return {k: page[k] for k in ("crawl_run_id", "canonical_url_hash")}
 
     def initialize_run(self, run: dict, root: dict, runs_table_name: str, site_write: dict) -> None:
+        """Atomically commit the site update, new run, and queued root page.
+
+        Called by CrawlSetupService before manual or nightly SQS dispatch. run
+        and root are prepared records; runs_table_name identifies CrawlRuns;
+        site_write is the prepared Sites transaction operation.
+
+        Both puts require their exact keyed items to be absent. If either exists,
+        DynamoDBConditionNotMetError is raised and the site update is also rolled
+        back. This transaction does not send messages or create S3 objects.
+        """
         self.dynamodb.transact_write(
             [
                 site_write,
@@ -71,15 +99,37 @@ class CrawlPagesTable:
         )
 
     def get(self, *, crawl_run_id: str, canonical_url_hash: str) -> dict[str, Any] | None:
+        """Read a single page strongly consistently, or return None if absent.
+
+        Workers use this before claiming work and after claims/checkpoints to
+        inspect the current owner, attempt count, and saved processing state.
+        """
         return self.dynamodb.get_item(
             key=dict(crawl_run_id=crawl_run_id, canonical_url_hash=canonical_url_hash),
             consistent_read=True,
         )
 
     def list_for_run(self, crawl_run_id: str) -> list[dict[str, Any]]:
+        """Return all pages for a run using paginated, strongly consistent queries.
+
+        Used for discovery deduplication/capacity checks, generation readiness,
+        API progress counts, recovery, and generator input loading. No status
+        filter is applied. Multiple query pages are not a transactional snapshot;
+        discovery and readiness callers coordinate using the run discovery lock.
+        """
         return self.dynamodb.query(Key("crawl_run_id").eq(crawl_run_id), ConsistentRead=True)
 
     def get_latest_crawled(self, *, site_id: str, canonical_url_hash: str) -> dict | None:
+        """Return the newest indexed crawl record for this site's canonical URL.
+
+        The crawler uses its raw_html_hash to detect changes before saving the
+        current raw checkpoint. Query site_url_crawled_at_index by site_url_key,
+        sorting crawled_at descending and reading one record across all runs.
+
+        Returns None if no record is indexed. This GSI is eventually consistent
+        and excludes records without its keys; COMPLETED status is not required,
+        and the current run is not explicitly excluded.
+        """
         pages = self.dynamodb.query(
             Key("site_url_key").eq(f"{site_id}#{canonical_url_hash}"),
             IndexName=LATEST_PAGE_INDEX,
@@ -89,6 +139,12 @@ class CrawlPagesTable:
         return pages[0] if pages else None
 
     def counts_for_run(self, crawl_run_id: str) -> dict[str, int]:
+        """Calculate API progress counts from the run's current page records.
+
+        Status and site-list/detail routes use this instead of persisted counters.
+        Discovered is the total; completed and failed are separate terminal counts;
+        pending is the remainder. Reads pages but does not update the run or pages.
+        """
         pages = self.list_for_run(crawl_run_id)
         complete = sum(p["status"] == "COMPLETED" for p in pages)
         failed = sum(p["status"] == "FAILED" for p in pages)
@@ -109,6 +165,20 @@ class CrawlPagesTable:
         expires_at: str,
         max_attempts: int,
     ) -> bool:
+        """Atomically claim an eligible page and mark its run as crawling/parsing.
+
+        process_message calls this before fetching or resuming a checkpoint.
+        page supplies the expected key, site, attempt count, and checkpoint state;
+        token identifies this worker, and now/expires_at define its UTC ISO lease.
+        runs_table_name identifies the run table in the cross-table transaction.
+
+        Requires a pending/crawling run and a queued page or expired working page,
+        an unchanged attempt count, and no outstanding retry delay. Sets the page
+        to CRAWLING_AND_PARSING and clears its pending-dispatch flag. Attempts
+        increase only without a parsed checkpoint; checkpoint resumption can
+        proceed even at max_attempts. Returns False for exhausted attempts or a
+        rejected condition; other database errors propagate.
+        """
         attempts = int(page.get("attempt_count", 0))
         if attempts >= max_attempts and not page.get("parsed_content_s3_key"):
             return False
@@ -169,6 +239,12 @@ class CrawlPagesTable:
 
     @staticmethod
     def ownership(token: str, now: str) -> Any:
+        """Build the condition requiring a working page and matching valid lease.
+
+        save_result, finish, and retry attach this to their updates so a stale
+        worker cannot mutate a page after ownership changes or its lease expires.
+        Returns a boto3 condition expression; it does not read or write anything.
+        """
         return (
             Attr("status").eq("CRAWLING_AND_PARSING")
             & Attr("worker_token").eq(token)
@@ -176,6 +252,14 @@ class CrawlPagesTable:
         )
 
     def save_result(self, page: dict, *, token: str, now: str, result: dict) -> None:
+        """Save checkpoint attributes only while this worker owns the page.
+
+        The crawler calls this after writing/reusing raw S3 data and again after
+        writing/reusing parsed JSON. result is a nonempty mapping of attributes
+        to set; page provides the key. Names are aliased to avoid reserved words.
+        A stale token or lease raises DynamoDBConditionNotMetError. This method
+        does not write S3, finish the page, or mutate the supplied page dictionary.
+        """
         names = {f"#f{i}": k for i, k in enumerate(result)}
         values = {f":field{i}": v for i, v in enumerate(result.values())}
         self.dynamodb.update_item(
@@ -187,6 +271,14 @@ class CrawlPagesTable:
         )
 
     def finish(self, page: dict, *, token: str, now: str, error: str | None = None) -> None:
+        """Finalize an owned page as COMPLETED, or FAILED when error is truthy.
+
+        process_message calls this after parsing and child registration/dispatch,
+        or after a nonretryable/exhausted processing failure. Clears lease, retry,
+        and dispatch fields and stores at most 1,000 error characters. A lost or
+        expired lease raises DynamoDBConditionNotMetError. The caller separately
+        checks whether the overall run can advance to generation.
+        """
         self.dynamodb.update_item(
             key=self.key(page),
             update_expression=(
@@ -204,6 +296,15 @@ class CrawlPagesTable:
         )
 
     def retry(self, page: dict, *, token: str, now: str, retry_after: str, error: str) -> None:
+        """Release page ownership and record a retry deadline after a transient failure.
+
+        process_message calls this before sending a delayed replacement message.
+        The page stays CRAWLING_AND_PARSING; its lease expires at now, its worker
+        token is removed, and dispatch_pending becomes true. Checkpoints and the
+        attempt count are preserved. retry_after is the earliest allowed reclaim
+        time. Requires current ownership and raises on a failed condition; sending
+        the retry message is a separate operation recoverable from these fields.
+        """
         self.dynamodb.update_item(
             key=self.key(page),
             update_expression=(
@@ -220,6 +321,17 @@ class CrawlPagesTable:
         )
 
     def fail_abandoned(self, page: dict, *, now: str, error: str) -> bool:
+        """Fail an unowned, unparsed page after its processing attempts are exhausted.
+
+        Called by message processing or periodic recovery when the caller has
+        already checked the attempt limit. This method compares the supplied
+        attempt count rather than checking a configured maximum itself. Requires
+        the same site, no parsed checkpoint, a queued/expired working state, and
+        no future retry deadline. Clears ownership/retry/dispatch metadata.
+
+        Returns False if a condition fails, protecting a worker that progressed
+        since the caller's read. Other database errors propagate.
+        """
         try:
             self.dynamodb.update_item(
                 key=self.key(page),
@@ -253,6 +365,14 @@ class CrawlPagesTable:
         return True
 
     def mark_sent(self, page: dict, *, dispatch_after: str) -> None:
+        """Record a successful crawl-queue send and its next recovery-check time.
+
+        dispatch calls this after SQS accepts a message. Sets dispatch_pending
+        false and stores dispatch_after, after which recovery may resend stranded
+        work. Only queued/working pages with the same attempt count are changed;
+        condition failures are ignored. Does not prove receipt or completion,
+        and does not make the send and database write atomic.
+        """
         with contextlib.suppress(DynamoDBConditionNotMetError):
             self.dynamodb.update_item(
                 key=self.key(page),
@@ -274,6 +394,19 @@ class CrawlPagesTable:
         worker_token: str,
         now: str,
     ) -> None:
+        """Insert a child batch while atomically checking both workflow owners.
+
+        _register_children calls this under the run discovery lock, after URL
+        deduplication and capacity checks, and before child SQS dispatch. parent
+        supplies the run/page keys; children contains prepared QUEUED records;
+        lock_token and worker_token identify the run and parent-page owners.
+
+        Requires an active crawling run and both matching unexpired leases at
+        now. Every child must be absent at its complete key. All checks and puts
+        succeed together or raise, with no partial batch insertion. The caller
+        enforces the discovery cap and batches at 50; this method does not count
+        pages. Two condition checks leave room for at most 98 child operations.
+        """
         # One transaction fences both owners and inserts at most 98 children.
         self.dynamodb.transact_write(
             [

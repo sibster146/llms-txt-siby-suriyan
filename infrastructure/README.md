@@ -173,7 +173,7 @@ The following Terraform variables control generator behavior and capacity:
 
 - `generator_model_id` (default: `us.moonshotai.kimi-k3`)
 - `generator_max_input_pages` (default: `500`)
-- `generator_max_output_links` (default: `30`)
+- `generator_max_output_links` (default: `20`; prompt requests at most 5 sections with 4 links each)
 - `generator_max_excerpt_chars` (default: `1000`)
 - `generator_max_model_tokens` (default: `4000`)
 - `generator_maximum_concurrency` (default: `2`)

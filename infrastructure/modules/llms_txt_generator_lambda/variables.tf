@@ -136,7 +136,7 @@ variable "max_input_pages" {
 variable "max_output_links" {
   description = "Maximum curated links allowed in the generated llms.txt."
   type        = number
-  default     = 30
+  default     = 20
 
   validation {
     condition     = var.max_output_links >= 1
