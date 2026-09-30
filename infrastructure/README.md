@@ -66,7 +66,7 @@ site, crawl-run, and version records are updated after the object has been writt
 
 ## Development nightly refresh
 
-EventBridge Scheduler invokes `dev_llms_txt_nightly_refresh` every day at 3:00 AM in
+EventBridge Scheduler invokes `dev_llms_txt_nightly_refresh` every day at 10:10 PM in
 `America/New_York`. The Lambda scans the Sites table and queues a fresh root crawl for
 every registered site. The schedule uses deterministic crawl-run IDs so EventBridge
 retries do not create duplicate runs. Daylight-saving changes are handled by the schedule
@@ -120,7 +120,7 @@ The following Terraform variables control generator behavior and capacity:
 
 The nightly schedule is controlled by Terraform variables:
 
-- `nightly_refresh_schedule_expression` (default: `cron(0 3 * * ? *)`)
+- `nightly_refresh_schedule_expression` (default: `cron(10 22 * * ? *)`)
 - `nightly_refresh_schedule_timezone` (default: `America/New_York`)
 
 Attach the permissions in `github-actions-dev-policy.json` to that deployment role. The state bucket is named `dev-llms-txt-<account-id>-terraform-state`; S3 bucket names cannot contain underscores, so this is the AWS-required exception to the resource naming convention.

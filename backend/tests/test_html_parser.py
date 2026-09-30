@@ -9,10 +9,15 @@ from app.services.html_parser import (
     HtmlParserService,
     ParseMessageError,
     _parse_document,
+    _run_counts_complete,
     discover_sitemap_urls,
     extract_child_urls,
     is_url_within_root,
 )
+
+
+def test_negative_pending_count_is_complete() -> None:
+    assert _run_counts_complete({"pending_page_count": -1})
 
 
 class FakeCrawlPagesTable:
@@ -39,7 +44,7 @@ class FakeCrawlPagesTable:
         **_: Any,
     ) -> bool:
         page = self.pages[(crawl_run_id, canonical_url_hash)]
-        if page["status"] not in {"CRAWLED", "PARSE_PENDING"}:
+        if page["status"] != "PARSE_PENDING":
             return False
         page["status"] = "PARSING"
         self.claims += 1

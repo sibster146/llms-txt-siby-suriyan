@@ -33,7 +33,7 @@ variable "nightly_refresh_image_uri" {
 variable "nightly_refresh_schedule_expression" {
   description = "EventBridge Scheduler expression for nightly website refreshes."
   type        = string
-  default     = "cron(0 3 * * ? *)"
+  default     = "cron(10 22 * * ? *)"
 }
 
 variable "nightly_refresh_schedule_timezone" {
