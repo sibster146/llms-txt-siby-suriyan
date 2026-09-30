@@ -1,3 +1,5 @@
+"""Start scheduled site crawls using shared setup and stable per-occurrence run IDs."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,6 +20,11 @@ class NightlyRefreshError(Exception):
 
 @dataclass(frozen=True)
 class NightlyRefreshResult:
+    """Summarize listed sites, accepted queue sends, and already-advanced runs.
+
+    Counts describe setup/dispatch outcomes, not completed crawl or generation work.
+    """
+
     discovered_sites: int
     queued_sites: int
     skipped_sites: int
@@ -34,12 +41,21 @@ class NightlyRefreshService:
         crawl_pages: CrawlPagesTable,
         crawl_queue: SQSClient,
     ) -> None:
+        """Bind table wrappers and the crawl queue without contacting AWS."""
         self.sites = sites
         self.crawl_runs = crawl_runs
         self.crawl_pages = crawl_pages
         self.crawl_queue = crawl_queue
 
     def refresh_all(self, *, scheduled_time: str) -> NightlyRefreshResult:
+        """Attempt to queue every Sites record for one scheduled occurrence.
+
+        Require a timezone-aware ISO scheduled_time, preserving its stripped
+        string for run identity and setup timestamps. Continue after individual
+        site failures, then raise an aggregate NightlyRefreshError if any failed;
+        successful sends are not rolled back. Otherwise return site counts.
+        Repeated invocations can resend PENDING runs but skip those already advanced.
+        """
         if not scheduled_time.strip():
             raise NightlyRefreshError("scheduled_time is required")
         try:
@@ -77,6 +93,14 @@ class NightlyRefreshService:
         )
 
     def _queue_site(self, site: dict[str, Any], scheduled_time: str) -> bool:
+        """Prepare one site's scheduled run, then publish its root crawl message.
+
+        Derive a stable run ID and call shared setup with resume_existing=True.
+        Return False if this occurrence's run has advanced beyond PENDING;
+        otherwise send after setup succeeds and return True. Missing fields or
+        storage/queue failures propagate to refresh_all for aggregate reporting.
+        A retry may resend a PENDING run, so duplicate messages remain possible.
+        """
         site_id = _required_site_value(site, "site_id")
         root_url = _required_site_value(site, "root_url")
         crawl_run_id = _scheduled_crawl_run_id(site_id, scheduled_time)
@@ -96,11 +120,17 @@ class NightlyRefreshService:
 
 
 def _scheduled_crawl_run_id(site_id: str, scheduled_time: str) -> str:
+    """Hash the exact scheduled-time string and site ID into a repeatable crawl ID.
+
+    Retries with identical inputs reuse the run. Equivalent timestamps written
+    differently are not normalized here and therefore produce different IDs.
+    """
     digest = sha256(f"{scheduled_time}:{site_id}".encode()).hexdigest()
     return f"crawl_{digest}"
 
 
 def _required_site_value(site: dict[str, Any], key: str) -> str:
+    """Return a stripped site field or raise NightlyRefreshError if missing/blank."""
     value = site.get(key)
     if not isinstance(value, str) or not value.strip():
         raise NightlyRefreshError(f"Site record is missing {key}")
