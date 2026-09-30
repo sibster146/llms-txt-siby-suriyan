@@ -95,28 +95,6 @@ class S3Client:
                 code="S3_HEAD_OBJECT_FAILED",
             ) from error
 
-    def delete_object(self, key: str) -> None:
-        try:
-            self.client.delete_object(Bucket=self.bucket_name, Key=key)
-        except Exception as error:
-            raise S3ClientError(
-                f"Failed to delete S3 object '{key}': {error}",
-                code="S3_DELETE_OBJECT_FAILED",
-            ) from error
-
-    def create_download_url(self, key: str, expires_in_seconds: int = 900) -> str:
-        try:
-            return self.client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": self.bucket_name, "Key": key},
-                ExpiresIn=expires_in_seconds,
-            )
-        except Exception as error:
-            raise S3ClientError(
-                f"Failed to create a download URL for S3 object '{key}': {error}",
-                code="S3_PRESIGN_OBJECT_FAILED",
-            ) from error
-
     @staticmethod
     def _is_not_found(error: ClientError) -> bool:
         code = str(error.response.get("Error", {}).get("Code", ""))

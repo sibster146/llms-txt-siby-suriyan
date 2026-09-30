@@ -27,13 +27,6 @@ def to_dynamodb_value(value: Any) -> Any:
     return value
 
 
-def dataclass_to_dynamodb_item(value: Any) -> dict[str, Any]:
-    """Convert a dataclass instance into a DynamoDB-ready item."""
-    if not is_dataclass(value) or isinstance(value, type):
-        raise TypeError("value must be a dataclass instance")
-    return to_dynamodb_value(asdict(value))
-
-
 class DynamoDBClientError(Exception):
     """Raised when a DynamoDB operation fails."""
 
@@ -98,30 +91,6 @@ class DynamoDBClient:
                 message=f"Failed to put item into DynamoDB: {error}",
                 code="DYNAMODB_PUT_ITEM_FAILED",
             ) from error
-
-    def batch_put_items(self, items: list[dict[str, Any]]) -> None:
-        if not items:
-            return
-
-        try:
-            with self.table.batch_writer() as batch:
-                for item in items:
-                    batch.put_item(Item=to_dynamodb_value(item))
-        except Exception as error:
-            raise DynamoDBClientError(
-                message=f"Failed to batch put items into DynamoDB: {error}",
-                code="DYNAMODB_BATCH_PUT_ITEMS_FAILED",
-            ) from error
-
-    def item_exists(self, key: dict[str, Any], consistent_read: bool = False) -> bool:
-        try:
-            response = self.table.get_item(Key=key, ConsistentRead=consistent_read)
-        except Exception as error:
-            raise DynamoDBClientError(
-                message=f"Failed to check item existence in DynamoDB: {error}",
-                code="DYNAMODB_ITEM_EXISTS_FAILED",
-            ) from error
-        return "Item" in response
 
     def get_item(
         self,
@@ -227,12 +196,3 @@ class DynamoDBClient:
                 code="DYNAMODB_UPDATE_ITEM_FAILED",
             ) from error
         return response.get("Attributes")
-
-    def delete_item(self, key: dict[str, Any]) -> None:
-        try:
-            self.table.delete_item(Key=key)
-        except Exception as error:
-            raise DynamoDBClientError(
-                message=f"Failed to delete item from DynamoDB: {error}",
-                code="DYNAMODB_DELETE_ITEM_FAILED",
-            ) from error

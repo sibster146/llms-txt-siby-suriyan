@@ -8,6 +8,8 @@ from app.tables.user_sites import UserSitesTable
 
 
 class RecordingDynamoDBClient:
+    table_name = "sites"
+
     def __init__(self) -> None:
         self.put_items: list[dict[str, Any]] = []
         self.updates: list[dict[str, Any]] = []
@@ -29,20 +31,22 @@ class RecordingDynamoDBClient:
         return self.query_results
 
 
-def test_sites_table_upserts_the_current_crawl() -> None:
+def test_sites_table_builds_the_current_crawl_transaction_write() -> None:
     dynamodb = RecordingDynamoDBClient()
 
-    SitesTable(dynamodb).upsert_for_crawl(
+    write = SitesTable(dynamodb).crawl_setup_write(
         site_id="site-1",
         root_url="https://example.com/",
         crawl_run_id="crawl-1",
         timestamp="2026-09-27T00:00:00+00:00",
     )
 
-    assert dynamodb.updates[0]["key"] == {"site_id": "site-1"}
-    assert dynamodb.updates[0]["expression_attribute_values"][":crawl_run_id"] == "crawl-1"
-    assert "if_not_exists(last_crawl_run_id" in dynamodb.updates[0]["update_expression"]
-    assert "latest_crawl_run_id = :crawl_run_id" in dynamodb.updates[0]["update_expression"]
+    update = write["Update"]
+    assert update["TableName"] == "sites"
+    assert update["Key"] == {"site_id": "site-1"}
+    assert update["ExpressionAttributeValues"][":run"] == "crawl-1"
+    assert "if_not_exists(last_crawl_run_id" in update["UpdateExpression"]
+    assert "latest_crawl_run_id = :run" in update["UpdateExpression"]
 
 
 def test_sites_table_marks_the_latest_changed_crawl() -> None:

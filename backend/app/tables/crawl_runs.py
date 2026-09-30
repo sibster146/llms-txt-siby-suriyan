@@ -121,20 +121,6 @@ class CrawlRunsTable:
             ),
         )
 
-    def update_status(
-        self, *, site_id: str, crawl_run_id: str, crawl_status: str, updated_at: str
-    ) -> None:
-        # Terminal runs are immutable; callers cannot reset a completed generation.
-        self.dynamodb.update_item(
-            key=dict(site_id=site_id, crawl_run_id=crawl_run_id),
-            update_expression="SET #s = :status, updated_at = :now",
-            expression_attribute_names={"#s": "status"},
-            expression_attribute_values={":status": crawl_status, ":now": updated_at},
-            condition_expression=Attr("status").is_in(
-                ["PENDING", "CRAWLING_AND_PARSING", "GENERATING"]
-            ),
-        )
-
     def mark_generation_completed(
         self,
         *,

@@ -58,7 +58,7 @@ variable "backend_desired_count" {
 variable "nightly_refresh_schedule_expression" {
   description = "EventBridge Scheduler expression for nightly website refreshes."
   type        = string
-  default     = "cron(0 1 * * ? *)"
+  default     = "cron(0 2 * * ? *)"
 }
 
 variable "nightly_refresh_schedule_timezone" {

@@ -14,7 +14,7 @@ from app.clients.dynamodb import (
     DynamoDBClient,
     DynamoDBClientError,
     DynamoDBConditionNotMetError,
-    dataclass_to_dynamodb_item,
+    to_dynamodb_value,
 )
 from app.configs.config import Settings
 from app.tables.crawl_pages import CrawlPagesTable
@@ -104,8 +104,8 @@ class FakeTable:
         self.item = Item
 
 
-def test_dataclass_to_dynamodb_item_converts_domain_values() -> None:
-    item = dataclass_to_dynamodb_item(
+def test_to_dynamodb_value_converts_dataclass_domain_values() -> None:
+    item = to_dynamodb_value(
         CrawlRun(
             crawl_run_id="run-1",
             status=Status.queued,
