@@ -7,6 +7,7 @@ from app.clients.dynamodb import DynamoDBClient, DynamoDBConditionNotMetError
 
 TERMINAL_PAGE_STATUSES = {"COMPLETED", "FAILED"}
 LATEST_PAGE_INDEX = "site_url_crawled_at_index"
+MAX_CHILDREN_ATTEMPTS = 2
 
 
 class CrawlPagesTable:
@@ -52,6 +53,7 @@ class CrawlPagesTable:
             created_at=created_at,
             updated_at=created_at,
             attempt_count=0,
+            children_attempt_count=0,
             dispatch_pending=True,
         )
         if parent_url is not None:
@@ -175,13 +177,27 @@ class CrawlPagesTable:
         Requires a pending/crawling run and a queued page or expired working page,
         an unchanged attempt count, and no outstanding retry delay. Sets the page
         to CRAWLING_AND_PARSING and clears its pending-dispatch flag. Attempts
-        increase only without a parsed checkpoint; checkpoint resumption can
-        proceed even at max_attempts. Returns False for exhausted attempts or a
+        increase only without a parsed checkpoint; checkpoint resumption uses
+        children_attempt_count with a separate two-attempt limit. The first
+        children attempt after parsing is counted by start_children_attempt.
+        Returns False for exhausted attempts or a
         rejected condition; other database errors propagate.
         """
         attempts = int(page.get("attempt_count", 0))
-        if attempts >= max_attempts and not page.get("parsed_content_s3_key"):
+        children_attempts = int(page.get("children_attempt_count", 0))
+        parsed = bool(page.get("parsed_content_s3_key"))
+        checkpoint_condition = (
+            "parsed_content_s3_key = :parsed_key"
+            if parsed
+            else "attribute_not_exists(parsed_content_s3_key)"
+        )
+        if self.attempts_exhausted(page, max_attempts):
             return False
+        children_condition = "children_attempt_count = :previous_children"
+        if children_attempts == 0:
+            children_condition = (
+                f"({children_condition} OR attribute_not_exists(children_attempt_count))"
+            )
         try:
             self.dynamodb.transact_write(
                 [
@@ -209,13 +225,15 @@ class CrawlPagesTable:
                             "UpdateExpression": (
                                 "SET #s = :working, worker_token = :token, "
                                 "lease_expires_at = :expiry, "
-                                "attempt_count = :next, updated_at = :now, dispatch_pending = :no "
+                                "attempt_count = :next, children_attempt_count = :children, "
+                                "updated_at = :now, dispatch_pending = :no "
                                 "REMOVE retry_after"
                             ),
                             "ConditionExpression": (
                                 "site_id = :site AND attempt_count = :previous AND "
                                 "(#s = :queued OR (#s = :working AND lease_expires_at <= :now)) "
-                                "AND (attribute_not_exists(retry_after) OR retry_after <= :now)"
+                                "AND (attribute_not_exists(retry_after) OR retry_after <= :now) "
+                                f"AND {children_condition} AND {checkpoint_condition}"
                             ),
                             "ExpressionAttributeNames": {"#s": "status"},
                             "ExpressionAttributeValues": {
@@ -226,6 +244,11 @@ class CrawlPagesTable:
                                 ":expiry": expires_at,
                                 ":next": attempts + (0 if page.get("parsed_content_s3_key") else 1),
                                 ":previous": attempts,
+                                ":previous_children": children_attempts,
+                                ":children": children_attempts + int(parsed),
+                                **(
+                                    {":parsed_key": page["parsed_content_s3_key"]} if parsed else {}
+                                ),
                                 ":now": now,
                                 ":no": False,
                             },
@@ -249,6 +272,40 @@ class CrawlPagesTable:
             Attr("status").eq("CRAWLING_AND_PARSING")
             & Attr("worker_token").eq(token)
             & Attr("lease_expires_at").gt(now)
+        )
+
+    @staticmethod
+    def attempts_exhausted(page: dict, max_attempts: int) -> bool:
+        """Select the crawl or children budget for message handling and recovery.
+
+        Legacy pages without children_attempt_count start at zero. A parsed
+        checkpoint switches the page to the separate two-attempt children budget.
+        """
+        if page.get("parsed_content_s3_key"):
+            return int(page.get("children_attempt_count", 0)) >= MAX_CHILDREN_ATTEMPTS
+        return int(page.get("attempt_count", 0)) >= max_attempts
+
+    def start_children_attempt(self, page: dict, *, token: str, now: str) -> None:
+        """Count the first children attempt after parsing in this invocation.
+
+        Resumed checkpoint attempts are counted by claim instead. Requires current
+        ownership and remaining budget. Counting before child work lets recovery
+        handle crashes during registration or dispatch.
+        """
+        self.dynamodb.update_item(
+            key=self.key(page),
+            update_expression=(
+                "SET children_attempt_count = if_not_exists(children_attempt_count, :zero) + :one"
+            ),
+            expression_attribute_values={":zero": 0, ":one": 1},
+            condition_expression=(
+                self.ownership(token, now)
+                & Attr("parsed_content_s3_key").exists()
+                & (
+                    Attr("children_attempt_count").not_exists()
+                    | Attr("children_attempt_count").lt(MAX_CHILDREN_ATTEMPTS)
+                )
+            ),
         )
 
     def save_result(self, page: dict, *, token: str, now: str, result: dict) -> None:
@@ -295,43 +352,67 @@ class CrawlPagesTable:
             condition_expression=self.ownership(token, now),
         )
 
-    def retry(self, page: dict, *, token: str, now: str, retry_after: str, error: str) -> None:
+    def retry(
+        self,
+        page: dict,
+        *,
+        token: str,
+        now: str,
+        retry_after: str,
+        error: str,
+        refund_children_attempt: bool = False,
+    ) -> None:
         """Release page ownership and record a retry deadline after a transient failure.
 
         process_message calls this before sending a delayed replacement message.
         The page stays CRAWLING_AND_PARSING; its lease expires at now, its worker
         token is removed, and dispatch_pending becomes true. Checkpoints and the
-        attempt count are preserved. retry_after is the earliest allowed reclaim
+        crawl attempt count are preserved. refund_children_attempt atomically
+        refunds a children attempt when discovery-lock contention prevented work.
+        retry_after is the earliest allowed reclaim
         time. Requires current ownership and raises on a failed condition; sending
         the retry message is a separate operation recoverable from these fields.
         """
+        condition = self.ownership(token, now)
+        values = {
+            ":now": now,
+            ":retry": retry_after,
+            ":error": error[:1000],
+            ":yes": True,
+        }
+        refund = ""
+        if refund_children_attempt:
+            condition &= Attr("children_attempt_count").gt(0)
+            values[":one"] = 1
+            refund = ", children_attempt_count = children_attempt_count - :one"
         self.dynamodb.update_item(
             key=self.key(page),
             update_expression=(
                 "SET lease_expires_at = :now, retry_after = :retry, last_error = :error, "
-                "dispatch_pending = :yes, updated_at = :now REMOVE worker_token, dispatch_after"
+                f"dispatch_pending = :yes, updated_at = :now{refund} "
+                "REMOVE worker_token, dispatch_after"
             ),
-            expression_attribute_values={
-                ":now": now,
-                ":retry": retry_after,
-                ":error": error[:1000],
-                ":yes": True,
-            },
-            condition_expression=self.ownership(token, now),
+            expression_attribute_values=values,
+            condition_expression=condition,
         )
 
     def fail_abandoned(self, page: dict, *, now: str, error: str) -> bool:
-        """Fail an unowned, unparsed page after its processing attempts are exhausted.
+        """Fail an unowned page after its crawl or children attempts are exhausted.
 
         Called by message processing or periodic recovery when the caller has
         already checked the attempt limit. This method compares the supplied
         attempt count rather than checking a configured maximum itself. Requires
-        the same site, no parsed checkpoint, a queued/expired working state, and
+        the same site, unchanged checkpoint/counters, a queued/expired working state, and
         no future retry deadline. Clears ownership/retry/dispatch metadata.
 
         Returns False if a condition fails, protecting a worker that progressed
         since the caller's read. Other database errors propagate.
         """
+        checkpoint_condition = Attr("parsed_content_s3_key").not_exists()
+        if page.get("parsed_content_s3_key"):
+            checkpoint_condition = Attr("parsed_content_s3_key").eq(
+                page["parsed_content_s3_key"]
+            ) & Attr("children_attempt_count").eq(int(page.get("children_attempt_count", 0)))
         try:
             self.dynamodb.update_item(
                 key=self.key(page),
@@ -349,7 +430,7 @@ class CrawlPagesTable:
                 condition_expression=(
                     Attr("site_id").eq(page["site_id"])
                     & Attr("attempt_count").eq(page["attempt_count"])
-                    & Attr("parsed_content_s3_key").not_exists()
+                    & checkpoint_condition
                     & (
                         (Attr("status").eq("QUEUED"))
                         | (
