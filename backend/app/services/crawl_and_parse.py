@@ -76,6 +76,13 @@ class CrawlRequest:
 
     @classmethod
     def from_message(cls, message: dict[str, Any]) -> CrawlRequest:
+        """Validate a crawl SQS message and return its immutable request fields.
+
+        Called before reading workflow records. Require the crawl_url action,
+        nonempty identifiers, nonnegative depth, and a SHA-256 matching the URL.
+        URL shape is checked here; public DNS checks happen before fetching.
+        Raise CrawlMessageError or UnsafeUrlError for invalid input.
+        """
         if message.get("action") != "crawl_url":
             raise CrawlMessageError("Crawl message action must be 'crawl_url'")
         payload = message.get("payload")
@@ -131,6 +138,7 @@ class _SafeRedirectHandler(HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> Request | None:
+        """Check a page or robots redirect's public destination before following it."""
         redirect_url = urljoin(req.full_url, newurl)
         validate_public_url(redirect_url)
         return super().redirect_request(req, fp, code, msg, headers, redirect_url)
@@ -142,6 +150,13 @@ def fetch_html_page(
     timeout_seconds: float,
     max_response_bytes: int,
 ) -> FetchedPage:
+    """Fetch bounded HTML or Markdown bytes and response metadata for a page.
+
+    Used when a page has no saved raw checkpoint. Check public destinations,
+    including redirects, and enforce content-type and response-size limits.
+    Translate HTTP 404 into a nonretryable PageNotFoundError; wrap other network
+    failures in WebCrawlerError so the service can apply its retry policy.
+    """
     validate_public_url(url)
     request = Request(
         url,
@@ -182,6 +197,12 @@ def fetch_html_page(
 
 
 def robots_allows(url: str, user_agent: str, timeout_seconds: float) -> bool:
+    """Check robots.txt before fetching a page without a raw checkpoint.
+
+    Evaluate rules for the configured user agent. Deny HTTP 401/403 responses;
+    allow other HTTP errors or ordinary network failures. Public-URL validation
+    and the robots response-size limit can still raise crawler errors.
+    """
     validate_public_url(url)
     parsed = urlsplit(url)
     robots_url = urlunsplit((parsed.scheme, parsed.netloc, "/robots.txt", "", ""))
@@ -206,6 +227,11 @@ def robots_allows(url: str, user_agent: str, timeout_seconds: float) -> bool:
 
 
 def validate_public_url(url: str) -> None:
+    """Reject unsafe URL shapes or any non-global resolved IP before HTTP access.
+
+    Check all DNS results, raising UnsafeUrlError for resolution failure or a
+    non-public address. This is a preflight check, not a pinned DNS connection.
+    """
     parsed = _validate_url_shape(url)
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
@@ -222,6 +248,10 @@ def validate_public_url(url: str) -> None:
 
 
 def _validate_url_shape(url: str) -> Any:
+    """Return URL components after rejecting non-HTTP, credentialed, or localhost URLs.
+
+    Used for message validation and fetch preflight; this performs no DNS lookup.
+    """
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise UnsafeUrlError("URL must use HTTP or HTTPS and include a hostname")
@@ -233,6 +263,7 @@ def _validate_url_shape(url: str) -> Any:
 
 
 def _read_limited(response: Any, max_response_bytes: int) -> bytes:
+    """Read a response with a one-byte overflow probe; raise if it exceeds the cap."""
     content = response.read(max_response_bytes + 1)
     if len(content) > max_response_bytes:
         raise ResponseTooLargeError(f"Response exceeds the {max_response_bytes}-byte crawl limit")
@@ -240,6 +271,7 @@ def _read_limited(response: Any, max_response_bytes: int) -> bytes:
 
 
 def _required_string(payload: dict[str, Any], field: str) -> str:
+    """Return a stripped message field or raise CrawlMessageError if it is blank."""
     value = payload.get(field)
     if not isinstance(value, str) or not value.strip():
         raise CrawlMessageError(f"Crawl message {field} must be a non-empty string")
@@ -306,6 +338,12 @@ def extract_child_urls(
     max_depth: int,
     max_links: int,
 ) -> list[str]:
+    """Return sorted, unique in-scope HTML links for child registration.
+
+    Stop discovery at max_depth, skip nofollow links and excluded file types,
+    and cap results at max_links. Resolve relative links against final_url or
+    an in-scope HTML base element. Exclude the root URL itself.
+    """
     if depth >= max_depth:
         return []
 
@@ -341,6 +379,12 @@ def extract_markdown_child_urls(
     max_depth: int,
     max_links: int,
 ) -> list[str]:
+    """Extract bounded, unique child links directly from Markdown tokens.
+
+    Used instead of the HTML tree extractor for Markdown responses. Resolve
+    relative links against final_url, apply root and file-type filters, and
+    return sorted URLs unless the page has already reached max_depth.
+    """
     if depth >= max_depth:
         return []
 
@@ -363,7 +407,11 @@ def extract_markdown_child_urls(
 
 
 def is_url_within_root(candidate_url: str, root_url: str, *, include_root: bool = False) -> bool:
-    """Return whether a URL is on the same origin and below the root path."""
+    """Check discovery scope by scheme, hostname, effective port, and root path.
+
+    Used for links, base elements, and sitemap results. Match path boundaries,
+    not arbitrary prefixes; include the root path only when include_root is true.
+    """
     try:
         candidate = urlsplit(candidate_url)
         root = urlsplit(root_url)
@@ -388,7 +436,12 @@ def is_url_within_root(candidate_url: str, root_url: str, *, include_root: bool 
 
 
 def discover_sitemap_urls(root_url: str, max_urls: int) -> list[str]:
-    """Discover in-scope URLs from robots.txt and bounded sitemap traversal."""
+    """Supplement root-page links with up to max_urls unique sitemap URLs.
+
+    Try /sitemap.xml and same-origin Sitemap entries from robots.txt, following
+    sitemap indexes up to SITEMAP_MAX_DOCUMENTS. Filter page URLs to crawl scope
+    and supported extensions; skip unavailable or invalid sitemap documents.
+    """
     if max_urls <= 0:
         return []
     root = urlsplit(root_url)
@@ -443,12 +496,19 @@ class _DiscoveryRedirectHandler(HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> Request | None:
+        """Validate public destinations before following robots or sitemap redirects."""
         redirect_url = urljoin(req.full_url, newurl)
         validate_public_url(redirect_url)
         return super().redirect_request(req, fp, code, msg, headers, redirect_url)
 
 
 def _fetch_discovery_resource(url: str, *, text: bool = False) -> bytes | str | None:
+    """Fetch an optional robots/sitemap resource with bounded size and timeout.
+
+    Bound both downloaded and gzip-expanded bytes. Return decoded UTF-8 when
+    text is true, otherwise bytes; return None for oversized data or caught
+    HTTP, network, gzip, and value errors. UnsafeUrlError is not suppressed.
+    """
     try:
         validate_public_url(url)
         request = Request(url, headers={"User-Agent": SITEMAP_USER_AGENT})
@@ -471,6 +531,11 @@ def _fetch_discovery_resource(url: str, *, text: bool = False) -> bytes | str | 
 
 
 def _parse_sitemap(payload: bytes, sitemap_url: str) -> list[tuple[str, bool]]:
+    """Return resolved loc URLs paired with whether they belong to a sitemap index.
+
+    Disable XML entity resolution and network access. Discovery treats malformed
+    XML or unsupported root elements as an empty list.
+    """
     try:
         parser = etree.XMLParser(resolve_entities=False, no_network=True, recover=False)
         root = etree.fromstring(payload, parser=parser)
@@ -485,12 +550,18 @@ def _parse_sitemap(payload: bytes, sitemap_url: str) -> list[tuple[str, bool]]:
 
 
 def _same_origin(first_url: str, second_url: str) -> bool:
+    """Compare origins without restricting paths when selecting sitemap documents."""
     second = urlsplit(second_url)
     origin = urlunsplit((second.scheme, second.netloc, "/", "", ""))
     return is_url_within_root(first_url, origin, include_root=True)
 
 
 def _normalize_http_url(url: str) -> str | None:
+    """Normalize a discovered HTTP URL, or return None for invalid scheme/host/port.
+
+    Lowercase scheme and hostname, omit default ports and fragments, and ensure
+    a path exists. Preserve query strings and path spelling for URL identity.
+    """
     try:
         parsed = urlsplit(url)
         port = parsed.port
@@ -510,6 +581,10 @@ def _normalize_http_url(url: str) -> str | None:
 
 
 def _merge_discovered_urls(primary: list[str], secondary: list[str], limit: int) -> list[str]:
+    """Deduplicate discovery lists in order up to a positive limit, primary first.
+
+    Root-page discovery uses this to prioritize sitemap URLs over extracted links.
+    """
     merged: list[str] = []
     seen: set[str] = set()
     for url in [*primary, *secondary]:
@@ -523,6 +598,11 @@ def _merge_discovered_urls(primary: list[str], secondary: list[str], limit: int)
 
 
 def canonicalize_discovered_url(url: str) -> str | None:
+    """Normalize a discovered URL and reject excluded asset/document extensions.
+
+    Called before scope checks and child URL hashing. Return None for rejected
+    links; public DNS validation is deferred until the page is fetched.
+    """
     normalized_url = _normalize_http_url(url)
     if normalized_url is None:
         return None
@@ -541,6 +621,12 @@ def extract_page_content(
     raw_html_hash: str,
     parser_version: str,
 ) -> dict[str, Any]:
+    """Build the parsed JSON payload from HTML for storage and later generation.
+
+    Use trafilatura for main-content Markdown and metadata, falling back to the
+    HTML tree for title, description, and language. Include headings, source
+    URL/hash, parser version, and parse time. This function does not write to S3.
+    """
     html_text = raw_html.decode("utf-8", errors="replace")
     main_content = (
         trafilatura.extract(
@@ -582,6 +668,12 @@ def extract_markdown_content(
     raw_html_hash: str,
     parser_version: str,
 ) -> dict[str, Any]:
+    """Build the parsed payload for a Markdown response without an HTML tree.
+
+    Use the first H1 as title and first paragraph as description; keep headings
+    and the stripped Markdown body. Include source/hash/version/time metadata
+    and leave language unset. The caller persists the result in S3.
+    """
     markdown_text = raw_markdown.decode("utf-8", errors="replace").strip()
     tokens = MarkdownIt("commonmark").parse(markdown_text)
     headings: list[dict[str, str]] = []
@@ -614,6 +706,11 @@ def extract_markdown_content(
 
 
 def _parse_document(raw_html: bytes, base_url: str) -> Any:
+    """Create a recoverable, non-networking lxml HTML tree for links and metadata.
+
+    Attach base_url for relative references and wrap value/type parsing errors
+    in HtmlParserError for the service's failure handling.
+    """
     try:
         return html.fromstring(
             raw_html,
@@ -625,12 +722,14 @@ def _parse_document(raw_html: bytes, base_url: str) -> Any:
 
 
 def _metadata_value(metadata: Any, name: str) -> str | None:
+    """Read and clean a trafilatura metadata field, returning None when empty."""
     value = getattr(metadata, name, None) if metadata is not None else None
     cleaned = _clean_text(str(value)) if value else ""
     return cleaned or None
 
 
 def _first_text(document: Any, xpath: str) -> str | None:
+    """Return cleaned text of the first matched HTML element for metadata fallback."""
     nodes = document.xpath(xpath)
     if not nodes:
         return None
@@ -639,6 +738,7 @@ def _first_text(document: Any, xpath: str) -> str | None:
 
 
 def _meta_description(document: Any) -> str | None:
+    """Read the first case-insensitive description meta tag as a metadata fallback."""
     values = document.xpath(
         "//meta[translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', "
         "'abcdefghijklmnopqrstuvwxyz')='description']/@content"
@@ -648,12 +748,14 @@ def _meta_description(document: Any) -> str | None:
 
 
 def _document_language(document: Any) -> str | None:
+    """Read the HTML lang attribute when extracted metadata lacks a language."""
     values = document.xpath("/html/@lang")
     cleaned = _clean_text(str(values[0])) if values else ""
     return cleaned or None
 
 
 def _clean_text(value: str) -> str:
+    """Collapse whitespace and trim extracted headings, text, and metadata."""
     return " ".join(value.split())
 
 
@@ -665,10 +767,12 @@ class WorkDeferred(Exception):
 
 
 def now() -> str:
+    """Return the current UTC ISO timestamp for workflow records and lease checks."""
     return datetime.now(UTC).isoformat()
 
 
 def after(seconds: int) -> str:
+    """Return a UTC ISO timestamp offset from now for leases and retry deadlines."""
     return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
 
 
@@ -698,6 +802,12 @@ class CrawlAndParseService:
         robots_checker=robots_allows,
         sitemap_discoverer=discover_sitemap_urls,
     ):
+        """Configure table/client dependencies, crawl limits, and recovery timing.
+
+        Store the supplied dependencies without performing I/O. Fetch, robots,
+        and sitemap callables can be replaced in tests. max_attempts limits
+        crawl/parse attempts; the table layer defines the separate children cap.
+        """
         self.pages = crawl_pages
         self.runs = crawl_runs
         self.sites = sites
@@ -719,6 +829,15 @@ class CrawlAndParseService:
         self.sitemap_discoverer = sitemap_discoverer
 
     def process_message(self, message: dict[str, Any]) -> None:
+        """Handle one crawl message under an atomic, token-fenced page claim.
+
+        Ignore deleted or finished work, resume raw/parsed checkpoints, register
+        children, then finish the page. Permanent errors or exhausted attempts
+        fail the page; other failures persist and dispatch a delayed retry.
+        Discovery-lock contention refunds the children attempt. Ownership
+        conflicts raise WorkDeferred. After a terminal page update, check whether
+        the run can generate; pending dispatch can also be recovered later.
+        """
         request = CrawlRequest.from_message(message)
         page = self.pages.get(
             crawl_run_id=request.crawl_run_id, canonical_url_hash=request.canonical_url_hash
@@ -812,6 +931,16 @@ class CrawlAndParseService:
         self.check_generation(run)
 
     def _crawl_and_parse(self, page: dict, token: str) -> list[str]:
+        """Persist raw/parsed checkpoints and return child URLs for the claimed page.
+
+        Reuse saved raw bytes on retries; otherwise check robots, fetch, hash,
+        and save a content-addressed S3 object before its DynamoDB checkpoint.
+        Replay site change timestamps when needed. Always extract links from raw
+        content, supplementing the root with sitemap discovery. Reuse parsed S3
+        content by parser version, raw hash, and final URL, saving its reference
+        before children are registered. Update the passed page with checkpoint
+        fields and children_root_url; all page writes require the worker token.
+        """
         if page.get("raw_html_s3_key"):
             raw = self.s3.get_bytes(page["raw_html_s3_key"])
         else:
@@ -904,6 +1033,14 @@ class CrawlAndParseService:
         return children
 
     def _register_children(self, parent: dict, worker_token: str, children: list[str]) -> None:
+        """Register unique children under the run lock, then dispatch outside it.
+
+        For each batch of 50 links, reload existing pages to deduplicate hashes
+        and enforce the run-wide cap, including the root. Transactional inserts
+        require both discovery-lock and parent-worker ownership. Raise WorkDeferred
+        when the discovery lock is busy. Finally resend this parent's children
+        whose dispatch intent remains pending from an interrupted attempt.
+        """
         run_key = dict(site_id=parent["site_id"], crawl_run_id=parent["crawl_run_id"])
         # Each short transaction batch gets a fresh lock and a fresh capacity calculation.
         for offset in range(0, len(children), 50):
@@ -952,6 +1089,13 @@ class CrawlAndParseService:
                 self.dispatch(child)
 
     def dispatch(self, page: dict, *, delay: int = 0) -> None:
+        """Send a nonterminal page to crawl SQS, then record dispatch acceptance.
+
+        Used for new children, retries, and recovery. delay is the SQS delay in
+        seconds; dispatch_after allows later recovery if processing never starts.
+        Sending before mark_sent preserves recoverability but can yield duplicate
+        messages, which must pass the page's ownership and status checks.
+        """
         if page["status"] in TERMINAL_PAGE_STATUSES:
             return
         self.crawl_queue.send_json(
@@ -971,6 +1115,14 @@ class CrawlAndParseService:
         self.pages.mark_sent(page, dispatch_after=after(self.lease_seconds + delay))
 
     def check_generation(self, run: dict) -> None:
+        """Check page completion under the discovery lock and dispatch generation.
+
+        Called after terminal page processing and by recovery. Wait for every
+        page to be terminal; fail the run if all failed, otherwise atomically
+        claim GENERATING. Send only when generation_dispatch_pending is set,
+        clearing it after queue acceptance. An already-generating run can retry
+        dispatch without repeating page checks; deleted/terminal runs are ignored.
+        """
         key = dict(site_id=run["site_id"], crawl_run_id=run["crawl_run_id"])
         current = self.runs.get(**key)
         if current is None or current["status"] in {"COMPLETED", "FAILED"}:
@@ -998,10 +1150,23 @@ class CrawlAndParseService:
             self.runs.mark_generation_sent(**key)
 
     def process_dead_letter(self, message: dict) -> None:
+        """Reprocess a crawl DLQ message through normal claim and attempt checks.
+
+        SQS receive counts do not determine failure; stored processing/children
+        attempts and page ownership decide whether to work, defer, or fail.
+        """
         # Transport receives are not processing attempts. The same claim rules apply.
         self.process_message(message)
 
     def recover(self, remaining_ms=lambda: 120000) -> None:
+        """Sweep active runs for abandoned work and pending generation dispatch.
+
+        The periodic recovery invocation skips terminal pages, valid leases,
+        and future retry times. Fail expired exhausted attempts; otherwise resend
+        unsent or overdue work, then check generation readiness. remaining_ms is
+        a callable reporting the invocation budget; stop below ten seconds.
+        Log per-run errors and leave them for a later sweep, with no sweep limit.
+        """
         for run in self.runs.list_active():
             if remaining_ms() < 10000:
                 return

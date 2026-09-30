@@ -1,3 +1,5 @@
+"""Share transactional crawl setup between user requests and scheduled refreshes."""
+
 from hashlib import sha256
 from typing import Any
 
@@ -12,6 +14,7 @@ class CrawlSetupService:
     def __init__(
         self, *, sites: SitesTable, crawl_runs: CrawlRunsTable, crawl_pages: CrawlPagesTable
     ) -> None:
+        """Store the site, run, and page table wrappers without performing I/O."""
         self.sites = sites
         self.crawl_runs = crawl_runs
         self.crawl_pages = crawl_pages
@@ -25,6 +28,18 @@ class CrawlSetupService:
         timestamp: str,
         resume_existing: bool = False,
     ) -> dict[str, Any] | None:
+        """Prepare workflow records and return the root-page SQS message to publish.
+
+        Hash the supplied root_url as-is for the root page key. For a new run,
+        atomically apply the site setup update, create a PENDING run, and create
+        its depth-zero QUEUED page using the caller's IDs and timestamp.
+
+        With resume_existing, reuse a matching PENDING run without rewriting its
+        records; return None if that run has already advanced. This checks only
+        the supplied crawl_run_id, not other active runs for the site. Transaction
+        errors propagate. The caller sends the returned message after successful
+        setup; this method neither publishes to SQS nor writes user membership.
+        """
         canonical_url_hash = sha256(root_url.encode()).hexdigest()
         existing_run = (
             self.crawl_runs.get(site_id=site_id, crawl_run_id=crawl_run_id)
