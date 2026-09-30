@@ -29,8 +29,8 @@ resource "aws_iam_role" "lambda" {
 
 data "aws_iam_policy_document" "lambda_permissions" {
   statement {
-    sid       = "ReadSites"
-    actions   = ["dynamodb:Scan"]
+    sid       = "ReadAndUpdateSites"
+    actions   = ["dynamodb:Scan", "dynamodb:UpdateItem"]
     resources = [var.sites_table_arn]
   }
 
@@ -134,7 +134,7 @@ resource "aws_iam_role_policy" "scheduler_permissions" {
 
 resource "aws_scheduler_schedule" "this" {
   name                         = local.schedule_name
-  description                  = "Refresh every registered website at 3:00 AM Eastern time."
+  description                  = "Refresh every registered website on the configured daily schedule."
   schedule_expression          = var.schedule_expression
   schedule_expression_timezone = var.schedule_timezone
   state                        = "ENABLED"
@@ -146,12 +146,12 @@ resource "aws_scheduler_schedule" "this" {
   target {
     arn      = aws_lambda_function.this.arn
     role_arn = aws_iam_role.scheduler.arn
-    input = jsonencode({
+    input = replace(replace(jsonencode({
       action         = "nightly_refresh"
       attempt_number = "<aws.scheduler.attempt-number>"
       execution_id   = "<aws.scheduler.execution-id>"
       scheduled_time = "<aws.scheduler.scheduled-time>"
-    })
+    }), "\\u003c", "<"), "\\u003e", ">")
 
     retry_policy {
       maximum_event_age_in_seconds = 3600

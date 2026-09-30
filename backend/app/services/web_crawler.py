@@ -14,6 +14,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from urllib.robotparser import RobotFileParser
 
+from app.clients.dynamodb import DynamoDBConditionNotMetError
 from app.clients.s3 import S3Client
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
@@ -164,7 +165,7 @@ class WebCrawlerService:
         if existing_page is None:
             raise WebCrawlerError("CrawlPages record does not exist")
         existing_status = existing_page.get("status")
-        if existing_status == "PARSE_PENDING":
+        if existing_status == "PARSING":
             return
         if existing_status == "FAILED":
             self._publish_generation_if_complete(request)
@@ -186,17 +187,21 @@ class WebCrawlerService:
             if not raw_html_s3_key:
                 raw_html_s3_key, final_url, html_unchanged = self._fetch_and_store(request)
 
+            ready = self.crawl_pages.mark_parse_pending(
+                crawl_run_id=request.crawl_run_id,
+                canonical_url_hash=request.canonical_url_hash,
+                updated_at=_utc_now(),
+            )
+            if not ready:
+                return
             self._publish_parse_message(
                 request,
                 raw_html_s3_key,
                 final_url,
                 html_unchanged,
             )
-            self.crawl_pages.mark_parse_pending(
-                crawl_run_id=request.crawl_run_id,
-                canonical_url_hash=request.canonical_url_hash,
-                updated_at=_utc_now(),
-            )
+        except DynamoDBConditionNotMetError:
+            return
         except Exception as error:
             non_retryable = isinstance(error, (PageNotFoundError, ResponseTooLargeError))
             exhausted = attempt >= self.max_attempts
@@ -488,12 +493,9 @@ def _required_string(payload: dict[str, Any], field: str) -> str:
 def _run_counts_complete(run: dict[str, Any]) -> bool:
     try:
         pending = int(run["pending_page_count"])
-        discovered = int(run["discovered_page_count"])
-        completed = int(run["completed_page_count"])
-        failed = int(run["failed_page_count"])
     except (KeyError, TypeError, ValueError):
         return False
-    return pending == 0 and completed + failed == discovered
+    return pending <= 0
 
 
 def _utc_now() -> str:

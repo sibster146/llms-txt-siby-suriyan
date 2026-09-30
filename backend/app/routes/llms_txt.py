@@ -29,6 +29,7 @@ from app.schemas.llms_txt import (
     SiteDetailResponse,
     SiteSummaryResponse,
 )
+from app.services.crawl_setup import CrawlSetupService
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 from app.tables.llms_txt_versions import LlmsTxtVersionsTable
@@ -207,7 +208,9 @@ def create_llms_txt(
     created_at = datetime.now(UTC).isoformat()
 
     try:
-        sites.upsert_for_crawl(
+        message = CrawlSetupService(
+            sites=sites, crawl_runs=crawl_runs, crawl_pages=crawl_pages
+        ).prepare(
             site_id=site_id,
             root_url=canonical_url,
             crawl_run_id=crawl_run_id,
@@ -219,19 +222,6 @@ def create_llms_txt(
             crawl_run_id=crawl_run_id,
             timestamp=created_at,
         )
-        crawl_runs.create(
-            site_id=site_id,
-            crawl_run_id=crawl_run_id,
-            created_at=created_at,
-        )
-        crawl_pages.create(
-            crawl_run_id=crawl_run_id,
-            canonical_url_hash=canonical_url_hash,
-            site_id=site_id,
-            url=canonical_url,
-            depth=0,
-            created_at=created_at,
-        )
     except DynamoDBClientError as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -239,19 +229,8 @@ def create_llms_txt(
         ) from error
 
     try:
-        crawl_queue.send_json(
-            {
-                "action": "crawl_url",
-                "payload": {
-                    "site_id": site_id,
-                    "crawl_run_id": crawl_run_id,
-                    "root_url": canonical_url,
-                    "url": canonical_url,
-                    "canonical_url_hash": canonical_url_hash,
-                    "depth": 0,
-                },
-            }
-        )
+        assert message is not None
+        crawl_queue.send_json(message)
     except SQSClientError as error:
         with suppress(DynamoDBClientError):
             crawl_runs.update_status(

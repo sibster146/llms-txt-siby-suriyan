@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from hashlib import sha256
 from typing import Any
 
 from app.clients.sqs import SQSClient
+from app.services.crawl_setup import CrawlSetupService
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 from app.tables.sites import SitesTable
@@ -40,6 +42,14 @@ class NightlyRefreshService:
     def refresh_all(self, *, scheduled_time: str) -> NightlyRefreshResult:
         if not scheduled_time.strip():
             raise NightlyRefreshError("scheduled_time is required")
+        try:
+            parsed_time = datetime.fromisoformat(scheduled_time.strip())
+            if parsed_time.tzinfo is None:
+                raise ValueError("timezone is required")
+        except ValueError as error:
+            raise NightlyRefreshError(
+                "scheduled_time must be an ISO timestamp with timezone"
+            ) from error
 
         site_records = self.sites.list_all()
         queued_sites = 0
@@ -69,47 +79,19 @@ class NightlyRefreshService:
     def _queue_site(self, site: dict[str, Any], scheduled_time: str) -> bool:
         site_id = _required_site_value(site, "site_id")
         root_url = _required_site_value(site, "root_url")
-        canonical_url_hash = sha256(root_url.encode()).hexdigest()
         crawl_run_id = _scheduled_crawl_run_id(site_id, scheduled_time)
-        existing_run = self.crawl_runs.get(site_id=site_id, crawl_run_id=crawl_run_id)
-
-        if existing_run is not None and existing_run.get("status") != "PENDING":
-            return False
-
-        if existing_run is None:
-            self.crawl_runs.create(
-                site_id=site_id,
-                crawl_run_id=crawl_run_id,
-                created_at=scheduled_time,
-            )
-
-        existing_page = self.crawl_pages.get(
+        message = CrawlSetupService(
+            sites=self.sites, crawl_runs=self.crawl_runs, crawl_pages=self.crawl_pages
+        ).prepare(
+            site_id=site_id,
+            root_url=root_url,
             crawl_run_id=crawl_run_id,
-            canonical_url_hash=canonical_url_hash,
+            timestamp=scheduled_time,
+            resume_existing=True,
         )
-        if existing_page is None:
-            self.crawl_pages.create(
-                crawl_run_id=crawl_run_id,
-                canonical_url_hash=canonical_url_hash,
-                site_id=site_id,
-                url=root_url,
-                depth=0,
-                created_at=scheduled_time,
-            )
-
-        self.crawl_queue.send_json(
-            {
-                "action": "crawl_url",
-                "payload": {
-                    "site_id": site_id,
-                    "crawl_run_id": crawl_run_id,
-                    "root_url": root_url,
-                    "url": root_url,
-                    "canonical_url_hash": canonical_url_hash,
-                    "depth": 0,
-                },
-            }
-        )
+        if message is None:
+            return False
+        self.crawl_queue.send_json(message)
         return True
 
 

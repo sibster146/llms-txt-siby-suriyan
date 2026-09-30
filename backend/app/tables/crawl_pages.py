@@ -34,7 +34,8 @@ class CrawlPagesTable:
                 created_at=created_at,
                 parent_url=parent_url,
                 status="PENDING",
-            )
+            ),
+            condition_expression=Attr("crawl_run_id").not_exists(),
         )
 
     def create_if_absent(
@@ -133,6 +134,10 @@ class CrawlPagesTable:
         crawl_status: str,
         updated_at: str,
     ) -> None:
+        allowed = {
+            "PENDING": ["DISCOVERED", "PENDING"],
+            "CRAWLING": ["DISCOVERED", "PENDING", "CRAWLING"],
+        }
         self.dynamodb.update_item(
             key={
                 "crawl_run_id": crawl_run_id,
@@ -144,6 +149,7 @@ class CrawlPagesTable:
                 ":status": crawl_status,
                 ":updated_at": updated_at,
             },
+            condition_expression=Attr("status").is_in(allowed[crawl_status]),
         )
 
     def mark_crawling(
@@ -213,6 +219,7 @@ class CrawlPagesTable:
             update_expression=f"SET {', '.join(update_parts)}",
             expression_attribute_names={"#status": "status"},
             expression_attribute_values=values,
+            condition_expression=Attr("status").eq("CRAWLING"),
         )
 
     def mark_parse_pending(
@@ -221,7 +228,7 @@ class CrawlPagesTable:
         crawl_run_id: str,
         canonical_url_hash: str,
         updated_at: str,
-    ) -> None:
+    ) -> bool:
         try:
             self.dynamodb.update_item(
                 key={
@@ -234,13 +241,11 @@ class CrawlPagesTable:
                     ":status": "PARSE_PENDING",
                     ":updated_at": updated_at,
                 },
-                condition_expression=(
-                    Attr("status").not_exists()
-                    | (Attr("status").ne("PARSED") & Attr("status").ne("FAILED"))
-                ),
+                condition_expression=Attr("status").is_in(["CRAWLED", "PARSE_PENDING"]),
             )
         except DynamoDBConditionNotMetError:
-            return
+            return False
+        return True
 
     def claim_parsing(
         self,
@@ -267,7 +272,7 @@ class CrawlPagesTable:
                     ":lease_expires_at": lease_expires_at,
                 },
                 condition_expression=(
-                    Attr("status").is_in(["CRAWLED", "PARSE_PENDING"])
+                    Attr("status").eq("PARSE_PENDING")
                     | (
                         Attr("status").eq("PARSING")
                         & (
@@ -288,12 +293,15 @@ class CrawlPagesTable:
         canonical_url_hash: str,
         updated_at: str,
     ) -> None:
-        self.update_status(
-            crawl_run_id=crawl_run_id,
-            canonical_url_hash=canonical_url_hash,
-            crawl_status="PENDING",
-            updated_at=updated_at,
-        )
+        try:
+            self.update_status(
+                crawl_run_id=crawl_run_id,
+                canonical_url_hash=canonical_url_hash,
+                crawl_status="PENDING",
+                updated_at=updated_at,
+            )
+        except DynamoDBConditionNotMetError:
+            return
 
     def mark_parsed(
         self,
@@ -302,6 +310,7 @@ class CrawlPagesTable:
         canonical_url_hash: str,
         parsed_content_s3_key: str,
         parsed_at: str,
+        claimed_at: str,
     ) -> None:
         self.dynamodb.update_item(
             key={
@@ -319,6 +328,9 @@ class CrawlPagesTable:
                 ":parsed_at": parsed_at,
                 ":updated_at": parsed_at,
             },
+            condition_expression=(
+                Attr("status").eq("PARSING") & Attr("parse_started_at").eq(claimed_at)
+            ),
         )
 
     def record_parse_failure(
@@ -330,6 +342,7 @@ class CrawlPagesTable:
         attempt: int,
         terminal: bool,
         updated_at: str,
+        claimed_at: str,
     ) -> None:
         self.dynamodb.update_item(
             key={
@@ -338,15 +351,19 @@ class CrawlPagesTable:
             },
             update_expression=(
                 "SET #status = :status, last_error = :last_error, "
-                "parse_attempt = :attempt, updated_at = :updated_at"
+                "parse_attempt = :attempt, updated_at = :updated_at, "
+                "parse_lease_expires_at = :updated_at"
             ),
             expression_attribute_names={"#status": "status"},
             expression_attribute_values={
-                ":status": "FAILED" if terminal else "PARSE_PENDING",
+                ":status": "FAILED" if terminal else "PARSING",
                 ":last_error": error_message[:1000],
                 ":attempt": attempt,
                 ":updated_at": updated_at,
             },
+            condition_expression=(
+                Attr("status").eq("PARSING") & Attr("parse_started_at").eq(claimed_at)
+            ),
         )
 
     def record_failure(
@@ -359,6 +376,13 @@ class CrawlPagesTable:
         terminal: bool,
         updated_at: str,
     ) -> bool:
+        values = {
+            ":last_error": error_message[:1000],
+            ":attempt": attempt,
+            ":updated_at": updated_at,
+        }
+        if terminal:
+            values[":status"] = "FAILED"
         try:
             self.dynamodb.update_item(
                 key={
@@ -366,17 +390,16 @@ class CrawlPagesTable:
                     "canonical_url_hash": canonical_url_hash,
                 },
                 update_expression=(
-                    "SET #status = :status, last_error = :last_error, "
+                    "SET "
+                    + ("#status = :status, " if terminal else "")
+                    + "last_error = :last_error, "
                     "crawl_attempt = :attempt, updated_at = :updated_at"
                 ),
-                expression_attribute_names={"#status": "status"},
-                expression_attribute_values={
-                    ":status": "FAILED" if terminal else "PENDING",
-                    ":last_error": error_message[:1000],
-                    ":attempt": attempt,
-                    ":updated_at": updated_at,
-                },
-                condition_expression=(Attr("status").ne("FAILED") if terminal else None),
+                expression_attribute_names={"#status": "status"} if terminal else None,
+                expression_attribute_values=values,
+                condition_expression=Attr("status").is_in(
+                    ["DISCOVERED", "PENDING", "CRAWLING", "CRAWLED", "PARSE_PENDING"]
+                ),
             )
         except DynamoDBConditionNotMetError:
             return False
