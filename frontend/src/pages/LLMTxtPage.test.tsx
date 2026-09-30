@@ -107,6 +107,42 @@ describe('LLMTxtPage', () => {
     })
   })
 
+  it('shows failure without a spinner or polling when no file exists', async () => {
+    const detail = await apiMocks.getSiteDetail('site-1')
+    apiMocks.getSiteDetail.mockResolvedValue({
+      ...detail,
+      current_version: null,
+      versions: [],
+      latest_crawl: {
+        site_id: 'site-1', crawl_run_id: 'crawl-failed', status: 'FAILED',
+        discovered_page_count: 1, completed_page_count: 0,
+        failed_page_count: 1, pending_page_count: 0,
+      },
+    })
+    const interval = vi.spyOn(window, 'setInterval')
+    render(<LLMTxtPage onBack={vi.fn()} onSignOut={vi.fn()} siteId="site-1" />)
+
+    expect(await screen.findByText('Crawl failed')).toBeTruthy()
+    expect(screen.getByText('The latest crawl failed. No llms.txt file was generated.')).toBeTruthy()
+    expect(screen.queryByText('The latest crawl is still processing.')).toBeNull()
+    expect(screen.getByRole('status').querySelector('.spin')).toBeNull()
+    expect(interval).not.toHaveBeenCalledWith(expect.any(Function), 4000)
+    expect(apiMocks.getCrawlStatus).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Refresh' }).hasAttribute('disabled')).toBe(false)
+  })
+
+  it('keeps an existing file visible when the latest crawl fails', async () => {
+    const detail = await apiMocks.getSiteDetail('site-1')
+    apiMocks.getSiteDetail.mockResolvedValue({
+      ...detail,
+      latest_crawl: { site_id: 'site-1', crawl_run_id: 'crawl-failed', status: 'FAILED' },
+    })
+    render(<LLMTxtPage onBack={vi.fn()} onSignOut={vi.fn()} siteId="site-1" />)
+
+    expect(await screen.findByText('# Current file')).toBeTruthy()
+    expect(screen.queryByText('Crawl failed')).toBeNull()
+  })
+
   it.each(['CRAWLING_AND_PARSING', 'GENERATING'])(
     'fetches and polls a scheduled %s run when the file page is reopened', async (status) => {
       let poll: (() => Promise<void>) | undefined
