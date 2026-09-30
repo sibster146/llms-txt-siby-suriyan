@@ -9,7 +9,7 @@ import pytest
 @pytest.mark.parametrize("environment", ["dev", "prod"])
 def test_crawl_handler_routes_dlq_and_returns_only_failed_records(monkeypatch, environment) -> None:
     path = (
-        Path(__file__).parents[2] / "deployables" / environment / "lambdas/web_crawler/handler.py"
+        Path(__file__).parents[3] / "deployables" / environment / "lambdas/web_crawler/handler.py"
     )
     spec = importlib.util.spec_from_file_location(f"crawler_{environment}", path)
     handler = importlib.util.module_from_spec(spec)

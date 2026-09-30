@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 HANDLER_PATH = (
-    Path(__file__).parents[2]
+    Path(__file__).parents[3]
     / "deployables"
     / "dev"
     / "lambdas"
@@ -105,7 +105,7 @@ def test_original_message_is_retried_if_scheduling_fails(monkeypatch: Any) -> No
 @pytest.mark.parametrize("failure", [None, "Bedrock request failed", "database", "malformed"])
 def test_dlq_finalizes_without_regeneration_or_republishing(monkeypatch, environment, failure):
     path = (
-        Path(__file__).parents[2]
+        Path(__file__).parents[3]
         / "deployables"
         / environment
         / "lambdas/llms_txt_generator/handler.py"

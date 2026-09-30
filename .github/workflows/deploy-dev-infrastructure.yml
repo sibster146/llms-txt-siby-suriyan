@@ -19,7 +19,7 @@ jobs:
   deploy:
     name: Creating Infrastructure
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     environment: dev
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -164,3 +164,26 @@ jobs:
           echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Schedule: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_schedule_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Image: ${NIGHTLY_REFRESH_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up Python for integration tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install integration test dependencies
+        run: python -m pip install -e 'backend[dev]'
+
+      - name: Test full guest crawl workflow
+        timeout-minutes: 40
+        env:
+          GUEST_EMAIL: ${{ secrets.GUEST_EMAIL }}
+          GUEST_PASSWORD: ${{ secrets.GUEST_PASSWORD }}
+        run: bash infrastructure/scripts/run-integration-tests.sh dev
+
+      - name: Upload integration test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-results-dev
+          path: backend/integration-results.xml
+          if-no-files-found: ignore
