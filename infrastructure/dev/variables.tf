@@ -101,7 +101,7 @@ variable "generator_max_input_pages" {
 variable "generator_max_output_links" {
   description = "Maximum curated links allowed in the generated llms.txt."
   type        = number
-  default     = 20
+  default     = 16
 }
 
 variable "generator_max_excerpt_chars" {
