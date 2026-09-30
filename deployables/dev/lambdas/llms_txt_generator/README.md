@@ -15,6 +15,17 @@ Unexpected processing failures are requeued with a 30-second delivery delay. The
 message carries its attempt number and is sent to `llm_txt_dlq` after four failed
 attempts. If scheduling the retry fails, the original message remains unacknowledged.
 
+The same Lambda consumes `llm_txt_dlq` through a separate event-source mapping
+(concurrency 2), identified by `LLM_TXT_DLQ_ARN`. It does not call Bedrock for DLQ
+messages: it conditionally changes a GENERATING crawl run to FAILED, stores a bounded
+`error_message`, updates `updated_at`, and removes pending-generation dispatch state.
+Completed, already-failed, and deleted runs are left unchanged.
+
+This also handles messages moved to the DLQ by SQS after timeouts or exhausted
+deliveries. If the database write fails, the message stays on the DLQ for retry.
+Malformed messages without identifiable run IDs remain on the DLQ and are logged
+for manual investigation; the DLQ retains messages for up to 14 days.
+
 Generated files are stored as immutable versions at:
 
 ```text

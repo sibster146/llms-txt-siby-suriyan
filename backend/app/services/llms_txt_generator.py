@@ -312,7 +312,7 @@ class LlmsTxtGeneratorService:
         records = [
             page
             for page in page_records
-            if page.get("status") == "PARSED" and page.get("parsed_content_s3_key")
+            if page.get("status") == "COMPLETED" and page.get("parsed_content_s3_key")
         ]
         records.sort(key=lambda page: (int(page.get("depth", 0)), str(page.get("url", ""))))
         pages: list[PageCandidate] = []

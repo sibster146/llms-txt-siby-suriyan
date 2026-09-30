@@ -35,13 +35,13 @@ data "aws_iam_policy_document" "permissions" {
       "sqs:GetQueueAttributes",
       "sqs:ReceiveMessage",
     ]
-    resources = [var.crawl_queue_arn]
+    resources = [var.crawl_queue_arn, var.crawl_dlq_arn]
   }
 
   statement {
     sid       = "PublishDownstreamMessages"
     actions   = ["sqs:SendMessage"]
-    resources = [var.parse_queue_arn, var.llm_txt_queue_arn]
+    resources = [var.crawl_queue_arn, var.llm_txt_queue_arn]
   }
 
   statement {
@@ -49,6 +49,8 @@ data "aws_iam_policy_document" "permissions" {
     actions = [
       "dynamodb:GetItem",
       "dynamodb:Query",
+      "dynamodb:PutItem",
+      "dynamodb:ConditionCheckItem",
       "dynamodb:UpdateItem",
     ]
     resources = [
@@ -59,7 +61,7 @@ data "aws_iam_policy_document" "permissions" {
 
   statement {
     sid       = "UpdateCrawlRunStatus"
-    actions   = ["dynamodb:UpdateItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"]
     resources = [var.crawl_runs_table_arn]
   }
 
@@ -70,9 +72,15 @@ data "aws_iam_policy_document" "permissions" {
   }
 
   statement {
+    sid       = "CheckMissingObjects"
+    actions   = ["s3:ListBucket"]
+    resources = [var.application_bucket_arn]
+  }
+
+  statement {
     sid       = "StoreRawHtml"
-    actions   = ["s3:PutObject"]
-    resources = ["${var.application_bucket_arn}/raw/*"]
+    actions   = ["s3:PutObject", "s3:GetObject"]
+    resources = ["${var.application_bucket_arn}/raw/*", "${var.application_bucket_arn}/parsed/*"]
   }
 }
 
@@ -95,7 +103,7 @@ resource "aws_cloudwatch_log_group" "this" {
 
 resource "aws_lambda_function" "this" {
   function_name = local.function_name
-  description   = "Safely downloads queued website pages and stores their raw HTML."
+  description   = "Crawls and parses one page, discovers children, and recovers stalled runs."
   package_type  = "Image"
   image_uri     = var.image_uri
   role          = aws_iam_role.this.arn
@@ -111,9 +119,17 @@ resource "aws_lambda_function" "this" {
       CRAWLER_REQUEST_TIMEOUT_SECONDS = tostring(var.request_timeout_seconds)
       CRAWLER_USER_AGENT              = var.user_agent
       CRAWL_PAGES_TABLE               = var.crawl_pages_table_name
+      CRAWL_DLQ_ARN                   = var.crawl_dlq_arn
       CRAWL_RUNS_TABLE                = var.crawl_runs_table_name
       SITES_TABLE                     = var.sites_table_name
-      PARSE_QUEUE_URL                 = var.parse_queue_url
+      CRAWL_QUEUE_URL                 = var.crawl_queue_url
+      CRAWL_DLQ_URL                   = var.crawl_dlq_url
+      CRAWLER_RETRY_DELAY_SECONDS     = tostring(var.retry_delay_seconds)
+      CRAWLER_LEASE_SECONDS           = tostring(var.timeout_seconds + 30)
+      CRAWLER_MAX_DEPTH               = tostring(var.max_depth)
+      CRAWLER_MAX_DISCOVERED_PAGES    = tostring(var.max_discovered_pages)
+      CRAWLER_MAX_LINKS_PER_PAGE      = tostring(var.max_links_per_page)
+      PARSER_VERSION                  = var.parser_version
       LLM_TXT_QUEUE_URL               = var.llm_txt_queue_url
     }
   }
@@ -135,4 +151,20 @@ resource "aws_lambda_event_source_mapping" "crawl_queue" {
   enabled                 = true
   batch_size              = 1
   function_response_types = ["ReportBatchItemFailures"]
+
+  scaling_config {
+    maximum_concurrency = var.maximum_concurrency
+  }
+}
+
+resource "aws_lambda_event_source_mapping" "crawl_dlq" {
+  event_source_arn        = var.crawl_dlq_arn
+  function_name           = aws_lambda_function.this.arn
+  enabled                 = true
+  batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+
+  scaling_config {
+    maximum_concurrency = 2
+  }
 }

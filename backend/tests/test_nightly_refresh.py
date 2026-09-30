@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,9 +21,13 @@ class FakeSitesTable:
             if record["site_id"] == kwargs["site_id"]:
                 record["updated_at"] = kwargs["timestamp"]
 
+    def crawl_setup_write(self, **kwargs):
+        return lambda: self.upsert_for_crawl(**kwargs)
+
 
 class FakeCrawlRunsTable:
     def __init__(self) -> None:
+        self.dynamodb = SimpleNamespace(table_name="runs")
         self.records: dict[tuple[str, str], dict[str, Any]] = {}
         self.created: list[dict[str, Any]] = []
 
@@ -49,6 +54,11 @@ class FakeCrawlPagesTable:
         self.created.append(kwargs)
         self.records[(kwargs["crawl_run_id"], kwargs["canonical_url_hash"])] = kwargs
 
+    def initialize_run(self, run, root, table_name, site_write):
+        self.runs.create(**run)
+        self.create(**root)
+        site_write()
+
 
 class FakeQueue:
     def __init__(self) -> None:
@@ -67,6 +77,7 @@ def _service() -> tuple[
 ]:
     runs = FakeCrawlRunsTable()
     pages = FakeCrawlPagesTable()
+    pages.runs = runs
     queue = FakeQueue()
     return (
         NightlyRefreshService(

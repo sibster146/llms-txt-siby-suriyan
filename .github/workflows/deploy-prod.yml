@@ -49,7 +49,6 @@ jobs:
           registry="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
           echo "bucket=prod-llms-txt-${account_id}-terraform-state" >> "${GITHUB_OUTPUT}"
           echo "TF_VAR_web_crawler_image_uri=${registry}/prod_llms_txt_web_crawler:${GITHUB_SHA}" >> "${GITHUB_ENV}"
-          echo "TF_VAR_html_parser_image_uri=${registry}/prod_llms_txt_html_parser:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_llms_txt_generator_image_uri=${registry}/prod_llms_txt_generator:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_nightly_refresh_image_uri=${registry}/prod_llms_txt_nightly_refresh:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_backend_image_uri=${registry}/prod_llms_txt_backend:${GITHUB_SHA}" >> "${GITHUB_ENV}"
@@ -79,7 +78,6 @@ jobs:
         run: |
           terraform -chdir=infrastructure/prod plan \
             -target=module.web_crawler_ecr \
-            -target=module.html_parser_ecr \
             -target=module.llms_txt_generator_ecr \
             -target=module.nightly_refresh_ecr \
             -target=module.backend_ecr \
@@ -108,17 +106,14 @@ jobs:
         shell: bash
         run: |
           crawler=$(terraform -chdir=infrastructure/prod output -raw web_crawler_ecr_repository_url)
-          parser=$(terraform -chdir=infrastructure/prod output -raw html_parser_ecr_repository_url)
           generator=$(terraform -chdir=infrastructure/prod output -raw llms_txt_generator_ecr_repository_url)
           refresh=$(terraform -chdir=infrastructure/prod output -raw nightly_refresh_ecr_repository_url)
           backend=$(terraform -chdir=infrastructure/prod output -raw backend_ecr_repository_url)
           echo "WEB_CRAWLER_IMAGE_URI=${crawler}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
-          echo "HTML_PARSER_IMAGE_URI=${parser}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "LLMS_TXT_GENERATOR_IMAGE_URI=${generator}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "NIGHTLY_REFRESH_IMAGE_URI=${refresh}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "BACKEND_IMAGE_URI=${backend}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_web_crawler_image_uri=${crawler}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
-          echo "TF_VAR_html_parser_image_uri=${parser}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_llms_txt_generator_image_uri=${generator}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_nightly_refresh_image_uri=${refresh}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_backend_image_uri=${backend}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
@@ -130,11 +125,6 @@ jobs:
         run: |
           docker build --platform linux/amd64 --file deployables/prod/lambdas/web_crawler/Dockerfile --tag "${WEB_CRAWLER_IMAGE_URI}" .
           docker push "${WEB_CRAWLER_IMAGE_URI}"
-
-      - name: Build and push HTML parser
-        run: |
-          docker build --platform linux/amd64 --file deployables/prod/lambdas/html_parser/Dockerfile --tag "${HTML_PARSER_IMAGE_URI}" .
-          docker push "${HTML_PARSER_IMAGE_URI}"
 
       - name: Build and push llms.txt generator
         run: |

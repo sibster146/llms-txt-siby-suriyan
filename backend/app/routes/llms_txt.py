@@ -1,4 +1,3 @@
-from contextlib import suppress
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Annotated
@@ -78,6 +77,7 @@ def list_user_sites(
     sites: Annotated[SitesTable, Depends(get_sites_table)],
     user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
     crawl_runs: Annotated[CrawlRunsTable, Depends(get_crawl_runs_table)],
+    crawl_pages: Annotated[CrawlPagesTable, Depends(get_crawl_pages_table)],
 ) -> list[SiteSummaryResponse]:
     try:
         mappings = user_sites.list_for_user(user_id)
@@ -86,11 +86,13 @@ def list_user_sites(
             site = sites.get(str(mapping["site_id"]))
             if site is None:
                 continue
-            crawl_run_id = str(mapping.get("last_crawl_run_id") or site["last_crawl_run_id"])
+            crawl_run_id = str(site.get("latest_crawl_run_id") or site["last_crawl_run_id"])
             crawl_run = crawl_runs.get(
                 site_id=str(site["site_id"]),
                 crawl_run_id=crawl_run_id,
             )
+            if crawl_run is not None:
+                crawl_run = {**crawl_run, **crawl_pages.counts_for_run(crawl_run_id)}
             site_records.append({**site, "latest_crawl": crawl_run})
     except (DynamoDBClientError, KeyError) as error:
         raise HTTPException(
@@ -112,6 +114,7 @@ def get_site_detail(
     sites: Annotated[SitesTable, Depends(get_sites_table)],
     user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
     crawl_runs: Annotated[CrawlRunsTable, Depends(get_crawl_runs_table)],
+    crawl_pages: Annotated[CrawlPagesTable, Depends(get_crawl_pages_table)],
     versions: Annotated[LlmsTxtVersionsTable, Depends(get_llms_txt_versions_table)],
     s3: Annotated[S3Client, Depends(get_s3_client)],
 ) -> SiteDetailResponse:
@@ -122,11 +125,13 @@ def get_site_detail(
         site = sites.get(site_id)
         if site is None:
             raise _site_not_found()
-        crawl_run_id = str(mapping.get("last_crawl_run_id") or site["last_crawl_run_id"])
+        crawl_run_id = str(site.get("latest_crawl_run_id") or site["last_crawl_run_id"])
         latest_crawl = crawl_runs.get(
             site_id=site_id,
             crawl_run_id=crawl_run_id,
         )
+        if latest_crawl is not None:
+            latest_crawl = {**latest_crawl, **crawl_pages.counts_for_run(crawl_run_id)}
         version_records = versions.list_for_site(site_id)
         current_version_id = site.get("current_llms_txt_version_id")
         current_record = next(
@@ -232,13 +237,6 @@ def create_llms_txt(
         assert message is not None
         crawl_queue.send_json(message)
     except SQSClientError as error:
-        with suppress(DynamoDBClientError):
-            crawl_runs.update_status(
-                site_id=site_id,
-                crawl_run_id=crawl_run_id,
-                crawl_status="FAILED",
-                updated_at=datetime.now(UTC).isoformat(),
-            )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The crawl request was saved but could not be queued.",
@@ -262,6 +260,7 @@ def get_crawl_status(
     user_id: Annotated[str, Depends(get_current_user_id)],
     user_sites: Annotated[UserSitesTable, Depends(get_user_sites_table)],
     crawl_runs: Annotated[CrawlRunsTable, Depends(get_crawl_runs_table)],
+    crawl_pages: Annotated[CrawlPagesTable, Depends(get_crawl_pages_table)],
 ) -> CrawlStatusResponse:
     try:
         if user_sites.get(user_id=user_id, site_id=site_id) is None:
@@ -278,4 +277,6 @@ def get_crawl_status(
     if crawl_run is None:
         raise _crawl_not_found()
 
-    return CrawlStatusResponse.model_validate(crawl_run)
+    return CrawlStatusResponse.model_validate(
+        {**crawl_run, **crawl_pages.counts_for_run(crawl_run_id)}
+    )

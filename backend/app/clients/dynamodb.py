@@ -55,6 +55,27 @@ class DynamoDBClient:
     def __init__(self, table: Any) -> None:
         self.table = table
 
+    @property
+    def table_name(self) -> str:
+        return self.table.name
+
+    def transact_write(self, items: list[dict[str, Any]]) -> None:
+        """Write across tables using the resource client's native-value serializer."""
+        try:
+            self.table.meta.client.transact_write_items(TransactItems=to_dynamodb_value(items))
+        except ClientError as error:
+            reasons = error.response.get("CancellationReasons", [])
+            codes = {reason.get("Code", "None") for reason in reasons}
+            if (
+                error.response.get("Error", {}).get("Code") == "TransactionCanceledException"
+                and "ConditionalCheckFailed" in codes
+                and codes <= {"None", "ConditionalCheckFailed"}
+            ):
+                raise DynamoDBConditionNotMetError("Transaction condition was not met.") from error
+            raise DynamoDBClientError(
+                f"Failed DynamoDB transaction: {error}", code="DYNAMODB_TRANSACTION_FAILED"
+            ) from error
+
     def put_item(
         self,
         item: dict[str, Any],

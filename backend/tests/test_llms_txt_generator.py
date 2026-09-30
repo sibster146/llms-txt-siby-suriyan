@@ -55,7 +55,7 @@ class FakeCrawlPagesTable:
         return [
             {
                 "canonical_url_hash": "root-hash",
-                "status": "PARSED",
+                "status": "COMPLETED",
                 "url": "https://example.com/",
                 "depth": 0,
                 "raw_html_hash": "root-content-hash",
@@ -63,7 +63,7 @@ class FakeCrawlPagesTable:
             },
             {
                 "canonical_url_hash": "docs-hash",
-                "status": "PARSED",
+                "status": "COMPLETED",
                 "url": "https://example.com/docs/start",
                 "depth": 1,
                 "raw_html_hash": "docs-content-hash",
@@ -229,9 +229,7 @@ def test_generator_persists_kimi_output_before_completing() -> None:
     assert "[Getting started](<https://example.com/docs/start>)" in result.content
     assert events == ["s3", "version", "site", "run"]
     assert result.s3_key in s3.objects
-    assert versions.records[("site-1", result.version_id)]["model_id"] == (
-        "us.moonshotai.kimi-k3"
-    )
+    assert versions.records[("site-1", result.version_id)]["model_id"] == ("us.moonshotai.kimi-k3")
     assert versions.records[("site-1", result.version_id)]["crawl_content_hash"]
     assert sites.completed[0]["version_id"] == result.version_id
     assert runs.completed[0]["version_id"] == result.version_id
