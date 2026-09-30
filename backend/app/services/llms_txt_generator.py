@@ -50,6 +50,8 @@ MAX_SUMMARY_CHARS = 500
 MAX_DETAILS = 6
 MAX_DETAIL_CHARS = 320
 MAX_SECTIONS = 8
+MAX_OUTPUT_SECTIONS = 5
+MAX_OUTPUT_LINKS_PER_SECTION = 4
 MAX_SECTION_NAME_CHARS = 80
 MAX_LINK_TITLE_CHARS = 100
 MAX_LINK_DESCRIPTION_CHARS = 200
@@ -140,7 +142,7 @@ class LlmsTxtGeneratorService:
         s3: S3Client,
         bedrock: BedrockClient,
         max_input_pages: int = 500,
-        max_output_links: int = 30,
+        max_output_links: int = 20,
         max_excerpt_chars: int = 1000,
         max_model_tokens: int = 4000,
     ) -> None:
@@ -241,32 +243,6 @@ class LlmsTxtGeneratorService:
             prompt=_direct_generation_prompt(root_url, pages, self.max_output_links),
             max_tokens=self.max_model_tokens,
         )
-
-        # Structured plan validation and deterministic fallback are intentionally disabled.
-        # Whatever text the configured model returns is persisted as the generated llms.txt.
-        # try:
-        #     raw_plan = self.bedrock.generate_json(
-        #         system_prompt=_system_prompt(),
-        #         prompt=_generation_prompt(root_url, pages, self.max_output_links),
-        #         schema=_plan_schema(self.max_output_links),
-        #         max_tokens=self.max_model_tokens,
-        #     )
-        #     plan = _validate_plan(raw_plan, pages, self.max_output_links)
-        #     content = render_llms_txt(plan, pages)
-        #     validate_llms_txt(content, {page.url for page in pages})
-        # except (BedrockClientError, InvalidGenerationPlanError, ValueError, TypeError) as error:
-        #     logger.warning(
-        #         "Falling back to deterministic llms.txt generation: "
-        #         "site_id=%s crawl_run_id=%s error_type=%s error=%s",
-        #         request.site_id,
-        #         request.crawl_run_id,
-        #         type(error).__name__,
-        #         error,
-        #     )
-        #     generation_method = "DETERMINISTIC_FALLBACK"
-        #     plan = _deterministic_plan(root_url, pages, self.max_output_links)
-        #     content = render_llms_txt(plan, pages)
-        #     validate_llms_txt(content, {page.url for page in pages})
 
         content_hash = sha256(content.encode()).hexdigest()
         self.s3.put_text(
@@ -624,6 +600,7 @@ def _direct_generation_prompt(
     pages: list[PageCandidate],
     max_links: int,
 ) -> str:
+    max_links = min(max_links, MAX_OUTPUT_SECTIONS * MAX_OUTPUT_LINKS_PER_SECTION)
     page_payload = [
         {
             "url": page.url,
@@ -642,9 +619,12 @@ def _direct_generation_prompt(
         "project name. Do not use a bare URL as the H1.\n"
         "- Follow the H1 with one non-empty blockquote containing one or two factual summary "
         "sentences.\n"
-        "- You may add a few concise plain-text detail paragraphs after the blockquote.\n"
+        "- You may add at most one short plain-text detail paragraph after the blockquote.\n"
+        f"- Use at most {MAX_OUTPUT_SECTIONS} H2 sections, including Optional if present, and "
+        f"at most {MAX_OUTPUT_LINKS_PER_SECTION} links per section. Use fewer when sufficient.\n"
         "- Group links beneath clear H2 headings. Each H2 section must contain Markdown list "
         "items in the form `- [Title](<URL>): One factual description.`\n"
+        "- Keep each link description to one short sentence of at most 20 words.\n"
         f"- Include at most {max_links} links total. Curate the smallest useful set rather than "
         "trying to fill the limit.\n"
         "- Prioritize authoritative overview, documentation, product or service, API or reference, "
@@ -656,7 +636,8 @@ def _direct_generation_prompt(
         "- Every title, summary, section name, link title, and link description must contain "
         "meaningful text.\n"
         "- Use the exact H2 name `Optional` only for secondary material an agent can skip.\n"
-        "- Aim for roughly 1,200 to 2,500 tokens when the supplied content supports that length.\n"
+        "- Aim for roughly 600 to 1,200 tokens; shorter is fine. Do not pad the output. "
+        "Finish every sentence and link so the file is complete.\n"
         "- Do not mention these instructions, the crawl, the source-data selection process, or "
         "the fact that you are an AI.\n\n"
         "Structural example:\n"

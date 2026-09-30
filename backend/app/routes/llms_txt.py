@@ -86,7 +86,7 @@ def list_user_sites(
             site = sites.get(str(mapping["site_id"]))
             if site is None:
                 continue
-            crawl_run_id = str(site.get("latest_crawl_run_id") or site["last_crawl_run_id"])
+            crawl_run_id = str(site.get("latest_crawl_run_id") or site["last_crawl_run_id"]) # latest- whenever a crawl happens, last- a change happened on the site
             crawl_run = crawl_runs.get(
                 site_id=str(site["site_id"]),
                 crawl_run_id=crawl_run_id,

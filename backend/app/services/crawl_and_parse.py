@@ -735,11 +735,15 @@ class CrawlAndParseService:
             return
         if run["status"] == "GENERATING":
             return
-        if int(page["attempt_count"]) >= self.max_attempts and not page.get(
-            "parsed_content_s3_key"
-        ):
+        if self.pages.attempts_exhausted(page, self.max_attempts):
             if not self.pages.fail_abandoned(
-                page, now=now(), error="Processing attempts exhausted"
+                page,
+                now=now(),
+                error=(
+                    "Children attempts exhausted"
+                    if page.get("parsed_content_s3_key")
+                    else "Processing attempts exhausted"
+                ),
             ):
                 raise WorkDeferred("A worker still owns the page")
             self.check_generation(run)
@@ -756,10 +760,26 @@ class CrawlAndParseService:
             raise WorkDeferred("Page owned by another worker or retry not yet due")
         # Read our claimed attempt number; subsequent mutations are fenced by token.
         page = self.pages.get(**self.pages.key(page))
+        resuming_children = bool(page.get("parsed_content_s3_key"))
         try:
             children = self._crawl_and_parse(page, token)
+            if not resuming_children:
+                self.pages.start_children_attempt(page, token=token, now=now())
             self._register_children(page, token, children)
             self.pages.finish(page, token=token, now=now())
+        except WorkDeferred as error:
+            # Lock contention is waiting, not a failed children-processing attempt.
+            self.pages.retry(
+                page,
+                token=token,
+                now=now(),
+                retry_after=after(self.retry_delay),
+                error=str(error),
+                refund_children_attempt=True,
+            )
+            retry = self.pages.get(**self.pages.key(page))
+            self.dispatch(retry, delay=self.retry_delay)
+            return
         except DynamoDBConditionNotMetError as error:
             raise WorkDeferred("Worker or discovery lease changed") from error
         except Exception as error:
@@ -775,10 +795,7 @@ class CrawlAndParseService:
                     UnsafeUrlError,
                     UnsupportedContentTypeError,
                 ),
-            ) or (
-                int(current["attempt_count"]) >= self.max_attempts
-                and not current.get("parsed_content_s3_key")
-            )
+            ) or self.pages.attempts_exhausted(current, self.max_attempts)
             if terminal:
                 self.pages.finish(current, token=token, now=now(), error=str(error))
             else:
@@ -1000,13 +1017,15 @@ class CrawlAndParseService:
                             continue
                         if page.get("retry_after", "") > timestamp:
                             continue
-                        if int(page["attempt_count"]) >= self.max_attempts and not page.get(
-                            "parsed_content_s3_key"
-                        ):
+                        if self.pages.attempts_exhausted(page, self.max_attempts):
                             self.pages.fail_abandoned(
                                 page,
                                 now=timestamp,
-                                error="Worker stopped before completing its final attempt",
+                                error=(
+                                    "Worker stopped before completing its final children attempt"
+                                    if page.get("parsed_content_s3_key")
+                                    else "Worker stopped before completing its final attempt"
+                                ),
                             )
                         elif (
                             page.get("dispatch_pending")

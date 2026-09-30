@@ -1,78 +1,26 @@
-import json
 from typing import Any
 
 KIMI_K3_MODEL_ID = "us.moonshotai.kimi-k3"
 
 
 class BedrockClientError(Exception):
-    """Raised when Amazon Bedrock cannot return a usable structured response."""
+    """Raised when Bedrock generation fails or returns no usable JSON or text."""
 
 
 class BedrockClient:
     """Small wrapper around Amazon Bedrock Converse."""
 
     def __init__(self, client: Any, model_id: str = KIMI_K3_MODEL_ID) -> None:
+        """Store an injected Bedrock Runtime client and the model to invoke.
+
+        Args:
+            client: A boto3-compatible client exposing the Converse API.
+            model_id: Bedrock model or inference profile ID; defaults to Kimi K3.
+
+        No network request is made during initialization.
+        """
         self.client = client
         self.model_id = model_id
-
-    def generate_json(
-        self,
-        *,
-        system_prompt: str,
-        prompt: str,
-        schema: dict[str, Any],
-        max_tokens: int,
-    ) -> dict[str, Any]:
-        tool_name = "create_llms_txt_plan"
-        inference_config: dict[str, Any] = {"maxTokens": max_tokens}
-        if "moonshotai.kimi-k3" not in self.model_id:
-            inference_config["temperature"] = 0
-
-        request = {
-            "modelId": self.model_id,
-            "system": [{"text": system_prompt}],
-            "messages": [{"role": "user", "content": [{"text": prompt}]}],
-            "inferenceConfig": inference_config,
-            "toolConfig": {
-                "tools": [
-                    {
-                        "toolSpec": {
-                            "name": tool_name,
-                            "description": "Return the curated llms.txt plan.",
-                            "inputSchema": {"json": schema},
-                        }
-                    }
-                ],
-                "toolChoice": {"tool": {"name": tool_name}},
-            },
-        }
-        if "amazon.nova-" in self.model_id:
-            request["additionalModelRequestFields"] = {"inferenceConfig": {"topK": 1}}
-        try:
-            response = self.client.converse(**request)
-        except Exception as error:
-            raise BedrockClientError(f"Bedrock generation failed: {error}") from error
-
-        content = response.get("output", {}).get("message", {}).get("content", [])
-        for block in content:
-            tool_use = block.get("toolUse") if isinstance(block, dict) else None
-            if isinstance(tool_use, dict) and tool_use.get("name") == tool_name:
-                result = tool_use.get("input")
-                if isinstance(result, dict):
-                    return result
-
-        for block in content:
-            text = block.get("text") if isinstance(block, dict) else None
-            if not isinstance(text, str):
-                continue
-            try:
-                result = json.loads(text)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(result, dict):
-                return result
-
-        raise BedrockClientError("Bedrock did not return the requested structured plan")
 
     def generate_text(
         self,
@@ -81,10 +29,26 @@ class BedrockClient:
         prompt: str,
         max_tokens: int,
     ) -> str:
-        inference_config: dict[str, Any] = {"maxTokens": max_tokens}
-        if "moonshotai.kimi-k3" not in self.model_id:
-            inference_config["temperature"] = 0
+        """Generate text through Converse without structured-output validation.
 
+        Args:
+            system_prompt: Instructions provided in the system message.
+            prompt: User message containing the generation request and source data.
+            max_tokens: Maximum output token count requested from Bedrock.
+
+        Returns:
+            All string-valued text blocks concatenated in response order without
+            added separators. Whitespace and Markdown fences are preserved;
+            non-text blocks are ignored.
+
+        Raises:
+            BedrockClientError: If the Converse request fails or the concatenated
+                text is empty.
+
+        Temperature is set to zero except for Kimi K3. This method does not check
+        llms.txt formatting or whether generation stopped at the token limit.
+        """
+        inference_config: dict[str, Any] = {"maxTokens": max_tokens}
         try:
             response = self.client.converse(
                 modelId=self.model_id,
