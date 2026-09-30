@@ -31,16 +31,11 @@ variable "receive_wait_time_seconds" {
   default     = 20
 }
 
-variable "visibility_timeout_seconds" {
-  description = "How long non-crawler messages remain hidden from other consumers."
-  type        = number
-  default     = 300
-}
 
 variable "crawl_visibility_timeout_seconds" {
   description = "How long a failed crawl message remains hidden before retrying."
   type        = number
-  default     = 30
+  default     = 720
 }
 
 variable "llm_txt_visibility_timeout_seconds" {
@@ -49,11 +44,6 @@ variable "llm_txt_visibility_timeout_seconds" {
   default     = 1800
 }
 
-variable "max_receive_count" {
-  description = "Number of failed parser receives before a message moves to its dead-letter queue."
-  type        = number
-  default     = 2
-}
 
 variable "crawl_max_receive_count" {
   description = "Total crawl delivery attempts before a message moves to its dead-letter queue."

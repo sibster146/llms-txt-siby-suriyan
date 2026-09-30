@@ -11,30 +11,27 @@ class SitesTable:
     def __init__(self, dynamodb: DynamoDBClient) -> None:
         self.dynamodb = dynamodb
 
-    def upsert_for_crawl(
-        self,
-        *,
-        site_id: str,
-        root_url: str,
-        crawl_run_id: str,
-        timestamp: str,
-    ) -> None:
-        self.dynamodb.update_item(
-            key={"site_id": site_id},
-            update_expression=(
-                "SET root_url = :root_url, normalized_root_url = :normalized_root_url, "
-                "last_crawl_run_id = if_not_exists(last_crawl_run_id, :crawl_run_id), "
-                "updated_at = :updated_at, "
-                "created_at = if_not_exists(created_at, :created_at)"
-            ),
-            expression_attribute_values={
-                ":root_url": root_url,
-                ":normalized_root_url": root_url,
-                ":crawl_run_id": crawl_run_id,
-                ":updated_at": timestamp,
-                ":created_at": timestamp,
-            },
-        )
+    def crawl_setup_write(
+        self, *, site_id: str, root_url: str, crawl_run_id: str, timestamp: str
+    ) -> dict[str, Any]:
+        """Site update to commit alongside the run and its root page."""
+        return {
+            "Update": {
+                "TableName": self.dynamodb.table_name,
+                "Key": {"site_id": site_id},
+                "UpdateExpression": (
+                    "SET root_url = :url, normalized_root_url = :url, "
+                    "last_crawl_run_id = if_not_exists(last_crawl_run_id, :run), "
+                    "latest_crawl_run_id = :run, updated_at = :now, "
+                    "created_at = if_not_exists(created_at, :now)"
+                ),
+                "ExpressionAttributeValues": {
+                    ":url": root_url,
+                    ":run": crawl_run_id,
+                    ":now": timestamp,
+                },
+            }
+        }
 
     def mark_content_changed(
         self,
@@ -61,7 +58,7 @@ class SitesTable:
             return
 
     def get(self, site_id: str) -> dict[str, Any] | None:
-        return self.dynamodb.get_item(key={"site_id": site_id})
+        return self.dynamodb.get_item(key={"site_id": site_id}, consistent_read=True)
 
     def list_all(self) -> list[dict[str, Any]]:
         return self.dynamodb.scan()

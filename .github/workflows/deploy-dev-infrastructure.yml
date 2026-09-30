@@ -16,10 +16,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Creating Infrastructure
+  infrastructure:
+    name: Create Infrastructure
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     environment: dev
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -49,12 +49,10 @@ jobs:
           account_id=$(aws sts get-caller-identity --query Account --output text)
           bucket="dev-llms-txt-${account_id}-terraform-state"
           crawler_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_web_crawler"
-          parser_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_html_parser"
           generator_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_generator"
           refresh_repository="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev_llms_txt_nightly_refresh"
           echo "bucket=${bucket}" >> "${GITHUB_OUTPUT}"
           echo "TF_VAR_web_crawler_image_uri=${crawler_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
-          echo "TF_VAR_html_parser_image_uri=${parser_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_llms_txt_generator_image_uri=${generator_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_nightly_refresh_image_uri=${refresh_repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
 
@@ -83,7 +81,6 @@ jobs:
         run: |
           terraform -chdir=infrastructure/dev plan \
             -target=module.web_crawler_ecr \
-            -target=module.html_parser_ecr \
             -target=module.llms_txt_generator_ecr \
             -target=module.nightly_refresh_ecr \
             -out=ecr.tfplan
@@ -95,13 +92,6 @@ jobs:
           repository=$(terraform -chdir=infrastructure/dev output -raw web_crawler_ecr_repository_url)
           echo "WEB_CRAWLER_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "TF_VAR_web_crawler_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
-
-      - name: Resolve HTML parser image URI
-        shell: bash
-        run: |
-          repository=$(terraform -chdir=infrastructure/dev output -raw html_parser_ecr_repository_url)
-          echo "HTML_PARSER_IMAGE_URI=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
-          echo "TF_VAR_html_parser_image_uri=${repository}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
 
       - name: Resolve llms.txt generator image URI
         shell: bash
@@ -130,17 +120,6 @@ jobs:
 
       - name: Push web crawler image
         run: docker push "${WEB_CRAWLER_IMAGE_URI}"
-
-      - name: Build HTML parser image
-        run: |
-          docker build \
-            --platform linux/amd64 \
-            --file deployables/dev/lambdas/html_parser/Dockerfile \
-            --tag "${HTML_PARSER_IMAGE_URI}" \
-            .
-
-      - name: Push HTML parser image
-        run: docker push "${HTML_PARSER_IMAGE_URI}"
 
       - name: Build llms.txt generator image
         run: |
@@ -178,9 +157,6 @@ jobs:
           echo "## Web crawler" >> "${GITHUB_STEP_SUMMARY}"
           echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw web_crawler_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Image: ${WEB_CRAWLER_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
-          echo "## HTML parser" >> "${GITHUB_STEP_SUMMARY}"
-          echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw html_parser_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
-          echo "Image: ${HTML_PARSER_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
           echo "## llms.txt generator" >> "${GITHUB_STEP_SUMMARY}"
           echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw llms_txt_generator_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Image: ${LLMS_TXT_GENERATOR_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
@@ -188,3 +164,62 @@ jobs:
           echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Schedule: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_schedule_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Image: ${NIGHTLY_REFRESH_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Export infrastructure outputs
+        run: terraform -chdir=infrastructure/dev output -json > terraform-outputs-dev.json
+
+      - name: Share infrastructure outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs-dev
+          path: terraform-outputs-dev.json
+          retention-days: 1
+
+  integration_tests:
+    name: Run Integration Tests
+    needs: infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TERRAFORM_OUTPUTS_FILE: .deployment/terraform-outputs-dev.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: integration-dev-${{ github.run_id }}
+
+      - name: Download infrastructure outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-outputs-dev
+          path: .deployment
+
+      - name: Set up Python for integration tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install integration test dependencies
+        run: python -m pip install -e 'backend[dev]'
+
+      - name: Test full guest crawl workflow
+        timeout-minutes: 40
+        env:
+          GUEST_EMAIL: ${{ secrets.GUEST_EMAIL }}
+          GUEST_PASSWORD: ${{ secrets.GUEST_PASSWORD }}
+        run: bash infrastructure/scripts/run-integration-tests.sh dev
+
+      - name: Upload integration test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-results-dev
+          path: backend/integration-results.xml
+          if-no-files-found: ignore

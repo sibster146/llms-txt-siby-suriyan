@@ -34,25 +34,30 @@ class CrawlSetupService:
         if existing_run is not None and existing_run.get("status") != "PENDING":
             return None
 
-        self.sites.upsert_for_crawl(
-            site_id=site_id, root_url=root_url, crawl_run_id=crawl_run_id, timestamp=timestamp
-        )
         if existing_run is None:
-            self.crawl_runs.create(site_id=site_id, crawl_run_id=crawl_run_id, created_at=timestamp)
-
-        existing_page = (
-            self.crawl_pages.get(crawl_run_id=crawl_run_id, canonical_url_hash=canonical_url_hash)
-            if resume_existing
-            else None
-        )
-        if existing_page is None:
-            self.crawl_pages.create(
+            run = CrawlRunsTable.new_item(
+                site_id=site_id,
+                crawl_run_id=crawl_run_id,
+                created_at=timestamp,
+                root_url=root_url,
+            )
+            root = CrawlPagesTable.new_item(
                 crawl_run_id=crawl_run_id,
                 canonical_url_hash=canonical_url_hash,
                 site_id=site_id,
                 url=root_url,
+                root_url=root_url,
                 depth=0,
                 created_at=timestamp,
+            )
+            site_write = self.sites.crawl_setup_write(
+                site_id=site_id,
+                root_url=root_url,
+                crawl_run_id=crawl_run_id,
+                timestamp=timestamp,
+            )
+            self.crawl_pages.initialize_run(
+                run, root, self.crawl_runs.dynamodb.table_name, site_write
             )
 
         return {

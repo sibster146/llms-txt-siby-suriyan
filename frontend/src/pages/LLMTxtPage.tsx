@@ -272,11 +272,10 @@ export function LLMTxtPage({ onBack, onSignOut, siteId }: LLMTxtPageProps) {
                       {displayedVersion.version_id === detail.current_version?.version_id && <span className="current-label">Current</span>}
                     </div>
                     <p>
-                      Generated {formatDate(
-                        displayedVersion.version_id === detail.current_version?.version_id
-                          ? detail.updated_at
-                          : displayedVersion.generated_at,
-                      )} by{' '}
+                      {displayedVersion.version_id === detail.current_version?.version_id
+                        ? <>Updated at {formatDate(detail.updated_at)}, generated at </>
+                        : 'Generated at '}
+                      {formatDate(displayedVersion.generated_at)} by{' '}
                       {methodLabel(displayedVersion.generation_method)}
                     </p>
                   </div>

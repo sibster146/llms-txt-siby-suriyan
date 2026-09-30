@@ -1,6 +1,6 @@
-# Web crawler Lambda
+# Crawl and parse Lambda
 
-The deployment artifact places this `handler.py` at its root and copies the repository's `backend` directory beside it. The handler imports the reusable clients, table abstractions, and crawler service from that bundled directory.
+The deployment artifact places this `handler.py` at its root and bundles `backend/app` beside it. The handler imports `CrawlAndParseService` from `app.services.crawl_and_parse`, which contains the fetching, parsing, discovery, and workflow logic in one file.
 
 GitHub Actions builds the image from the repository root:
 
@@ -18,6 +18,7 @@ Each image is tagged with its Git commit SHA and pushed to the environment's ECR
   "payload": {
     "site_id": "site_...",
     "crawl_run_id": "crawl_...",
+    "root_url": "https://example.com/",
     "url": "https://example.com/",
     "canonical_url_hash": "<sha256-of-url>",
     "depth": 0
@@ -25,9 +26,10 @@ Each image is tagged with its Git commit SHA and pushed to the environment's ECR
 }
 ```
 
-The parser message includes `unchanged`. When it is `true`, the parser reuses
-`raw_html_s3_key`, skips content extraction, and only extracts links to enqueue
-for crawling.
+Each invocation crawls and parses one page. Unchanged content reuses stored raw
+and parsed objects; links are still extracted for child discovery. There is no
+separate parser queue. EventBridge also invokes this handler with
+`{"action":"recover_crawls"}` to recover interrupted work.
 
 ## Environment
 
@@ -35,8 +37,18 @@ for crawling.
 - `CRAWL_PAGES_TABLE`
 - `CRAWL_RUNS_TABLE`
 - `APPLICATION_S3_BUCKET`
-- `PARSE_QUEUE_URL`
+- `SITES_TABLE`
+- `CRAWL_QUEUE_URL`
+- `CRAWL_DLQ_URL`
+- `CRAWL_DLQ_ARN`
+- `LLM_TXT_QUEUE_URL`
 - `CRAWLER_USER_AGENT`
 - `CRAWLER_REQUEST_TIMEOUT_SECONDS`
 - `CRAWLER_MAX_RESPONSE_BYTES`
 - `CRAWLER_MAX_ATTEMPTS`
+- `CRAWLER_RETRY_DELAY_SECONDS`
+- `CRAWLER_LEASE_SECONDS`
+- `CRAWLER_MAX_DEPTH`
+- `CRAWLER_MAX_LINKS_PER_PAGE`
+- `CRAWLER_MAX_DISCOVERED_PAGES`
+- `PARSER_VERSION`
