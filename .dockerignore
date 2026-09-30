@@ -1,0 +1,11 @@
+**
+!backend/
+!backend/pyproject.toml
+!backend/app/
+!backend/app/**
+!deployables/
+!deployables/dev/
+!deployables/dev/lambdas/
+!deployables/dev/lambdas/**
+!deployables/prod/
+!deployables/prod/**
