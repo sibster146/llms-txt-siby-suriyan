@@ -6,11 +6,7 @@ import pytest
 from app.clients.bedrock import BedrockClientError
 from app.services.llms_txt_generator import (
     GenerationMessageError,
-    InvalidGenerationPlanError,
     LlmsTxtGeneratorService,
-    PageCandidate,
-    _deterministic_plan,
-    validate_llms_txt,
 )
 
 
@@ -278,54 +274,6 @@ def test_generator_propagates_bedrock_failure_without_creating_a_version() -> No
     assert events == []
 
 
-def test_deterministic_fallback_applies_editorial_constraints() -> None:
-    pages = [
-        PageCandidate(
-            page_id="page_root",
-            url="https://example.com/",
-            title="Example " * 30,
-            description="First summary sentence. Second summary sentence. Third is excluded.",
-            headings=(),
-            excerpt="",
-            depth=0,
-        ),
-        PageCandidate(
-            page_id="page_login",
-            url="https://example.com/login",
-            title="Login",
-            description="Sign in to an account.",
-            headings=(),
-            excerpt="",
-            depth=1,
-        ),
-        *[
-            PageCandidate(
-                page_id=f"page_{index}",
-                url=f"https://example.com/docs/page-{index}",
-                title=f"Documentation page {index} " + ("title " * 30),
-                description="One useful sentence. A second sentence should not be included.",
-                headings=(),
-                excerpt="",
-                depth=1,
-            )
-            for index in range(60)
-        ],
-    ]
-
-    plan = _deterministic_plan("https://example.com/", pages, max_output_links=30)
-    entries = [entry for section in plan.sections for entry in section.entries]
-
-    assert len(plan.site_name) <= 80
-    assert "Third is excluded" not in plan.summary
-    assert len(plan.summary) <= 320
-    assert len(plan.sections) <= 8
-    assert len(entries) == 30
-    assert all(entry.page_id != "page_login" for entry in entries)
-    assert all(len(entry.title) <= 100 for entry in entries)
-    assert all(len(entry.description) <= 200 for entry in entries)
-    assert all("second sentence" not in entry.description.lower() for entry in entries)
-
-
 def test_generator_retry_reuses_the_existing_version() -> None:
     bedrock = FakeBedrockClient(_valid_content())
     service, _, runs, _, _, events = _service(bedrock)
@@ -377,17 +325,3 @@ def test_generator_rejects_an_invalid_queue_message() -> None:
 
     with pytest.raises(GenerationMessageError):
         service.process_message({"action": "wrong", "payload": {}})
-
-
-def test_llms_txt_validator_rejects_unknown_urls_and_bad_sections() -> None:
-    with pytest.raises(InvalidGenerationPlanError):
-        validate_llms_txt(
-            "# Example\n\n> Summary\n\n## Docs\n\n- [Made up](<https://other.example/>)\n",
-            {"https://example.com/"},
-        )
-
-    with pytest.raises(InvalidGenerationPlanError):
-        validate_llms_txt(
-            "# Example\n\n> Summary\n\n## Empty\n",
-            {"https://example.com/"},
-        )

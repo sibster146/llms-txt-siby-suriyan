@@ -1,3 +1,5 @@
+"""Expose Cognito account creation and shared guest sign-in endpoints."""
+
 from typing import Annotated, Any
 
 import jwt
@@ -24,6 +26,11 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
 def _authentication_result(result: dict[str, Any]) -> tuple[str, int]:
+    """Extract a string access token and integer expiry from a Cognito auth result.
+
+    Used by guest sign-in; raise CognitoAuthenticationError for missing or
+    incorrectly typed fields. This checks response shape, not token validity.
+    """
     access_token = result.get("AccessToken")
     expires_in = result.get("ExpiresIn")
     if not isinstance(access_token, str) or not isinstance(expires_in, int):
@@ -32,6 +39,7 @@ def _authentication_result(result: dict[str, Any]) -> tuple[str, int]:
 
 
 def _guest_authentication_unavailable() -> HTTPException:
+    """Build the generic guest-access HTTP 503 response without exposing credentials."""
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="Guest access is temporarily unavailable.",
@@ -43,6 +51,13 @@ def sign_up(
     payload: SignUpRequest,
     cognito: Annotated[CognitoClient, Depends(get_cognito_client)],
 ) -> UserResponse:
+    """Create a Cognito account and return its ID and lowercased email with HTTP 201.
+
+    Accept the validated signup payload without requiring an existing session.
+    Delegate user creation to the Cognito client. Map existing accounts to 409,
+    rejected passwords to 422, throttling to 429, and other Cognito failures to
+    502. This endpoint does not return session tokens.
+    """
     email = str(payload.email).lower()
 
     try:
@@ -76,6 +91,14 @@ def sign_in_as_guest(
     cognito: Annotated[CognitoClient, Depends(get_cognito_client)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> GuestSessionResponse:
+    """Sign in with configured guest credentials and return ordinary session tokens.
+
+    Authenticate server-side through Cognito, requiring access, ID, and refresh
+    tokens. Decode the returned access token without signature verification only
+    to read its sub; this is not validation of a caller-supplied bearer token.
+    Return the guest identity, tokens, and expiry. Map throttling to HTTP 429 and
+    Cognito/token-decoding failures to the generic guest-unavailable HTTP 503.
+    """
     try:
         result = cognito.authenticate_user(
             email=str(settings.guest_email),
