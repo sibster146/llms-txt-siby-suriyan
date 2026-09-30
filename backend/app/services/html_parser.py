@@ -6,6 +6,7 @@ import json
 import posixpath
 import re
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -18,6 +19,7 @@ import trafilatura
 from lxml import etree, html
 from markdown_it import MarkdownIt
 
+from app.clients.dynamodb import DynamoDBConditionNotMetError
 from app.clients.s3 import S3Client
 from app.clients.sqs import SQSClient, SQSClientError
 from app.services.web_crawler import validate_public_url
@@ -184,6 +186,9 @@ class HtmlParserService:
             self._publish_generation_if_complete(request)
             return
 
+        if page_record.get("status") not in {"PARSE_PENDING", "PARSING"}:
+            raise HtmlParserError("Page is not ready for parsing")
+
         raw_html_hash = str(page_record.get("raw_html_hash", ""))
         if not SHA256_PATTERN.fullmatch(raw_html_hash):
             raise HtmlParserError("CrawlPages record is missing raw_html_hash")
@@ -277,6 +282,7 @@ class HtmlParserService:
                 canonical_url_hash=request.canonical_url_hash,
                 parsed_content_s3_key=parsed_key,
                 parsed_at=parsed_at,
+                claimed_at=started_at.isoformat(),
             )
             run_counts = self.crawl_runs.record_parsed_page(
                 site_id=request.site_id,
@@ -284,15 +290,20 @@ class HtmlParserService:
                 updated_at=parsed_at,
             )
             self._publish_generation_if_complete(request, run_counts)
+        except DynamoDBConditionNotMetError:
+            return
         except Exception as error:
-            self.crawl_pages.record_parse_failure(
-                crawl_run_id=request.crawl_run_id,
-                canonical_url_hash=request.canonical_url_hash,
-                error_message=str(error),
-                attempt=attempt,
-                terminal=attempt >= self.max_attempts,
-                updated_at=_utc_now(),
-            )
+            # Completion or a newer attempt must not be reset by this failure.
+            with suppress(DynamoDBConditionNotMetError):
+                self.crawl_pages.record_parse_failure(
+                    crawl_run_id=request.crawl_run_id,
+                    canonical_url_hash=request.canonical_url_hash,
+                    error_message=str(error),
+                    attempt=attempt,
+                    terminal=attempt >= self.max_attempts,
+                    updated_at=_utc_now(),
+                    claimed_at=started_at.isoformat(),
+                )
             raise
 
     def _parsed_content_key(
@@ -802,12 +813,9 @@ def _required_bool(payload: dict[str, Any], name: str) -> bool:
 def _run_counts_complete(run: dict[str, Any]) -> bool:
     try:
         pending = int(run["pending_page_count"])
-        discovered = int(run["discovered_page_count"])
-        completed = int(run["completed_page_count"])
-        failed = int(run["failed_page_count"])
     except (KeyError, TypeError, ValueError):
         return False
-    return pending == 0 and completed + failed == discovered
+    return pending <= 0
 
 
 def _utc_now() -> str:

@@ -99,7 +99,7 @@ class CrawlRunsTable:
                         Attr("status").not_exists()
                         | (Attr("status").ne("GENERATING") & Attr("status").ne("COMPLETED"))
                     )
-                    & Attr("pending_page_count").eq(0)
+                    & Attr("pending_page_count").lte(0)
                 ),
             )
         except DynamoDBConditionNotMetError:

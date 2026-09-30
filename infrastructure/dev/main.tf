@@ -34,7 +34,7 @@ module "sqs" {
   project_name                       = var.project_name
   max_receive_count                  = var.parser_max_attempts
   crawl_visibility_timeout_seconds   = 30
-  crawl_max_receive_count            = 4
+  crawl_max_receive_count            = 2
   llm_txt_visibility_timeout_seconds = 1800
   llm_txt_max_receive_count          = 4
 }
@@ -102,7 +102,7 @@ module "web_crawler_lambda" {
   sites_table_arn         = module.dynamodb.table_arns.sites
   application_bucket_name = module.s3.bucket_name
   application_bucket_arn  = module.s3.bucket_arn
-  max_attempts            = 4
+  max_attempts            = 2
   timeout_seconds         = 25
   request_timeout_seconds = 10
   max_response_bytes      = 5242880

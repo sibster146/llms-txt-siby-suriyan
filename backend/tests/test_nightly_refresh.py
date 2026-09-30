@@ -15,6 +15,11 @@ class FakeSitesTable:
     def list_all(self) -> list[dict[str, Any]]:
         return self.records
 
+    def upsert_for_crawl(self, **kwargs: Any) -> None:
+        for record in self.records:
+            if record["site_id"] == kwargs["site_id"]:
+                record["updated_at"] = kwargs["timestamp"]
+
 
 class FakeCrawlRunsTable:
     def __init__(self) -> None:
@@ -88,6 +93,7 @@ def test_refresh_queues_every_site() -> None:
     assert len(pages.created) == 2
     assert len(queue.messages) == 2
     assert queue.messages[0]["payload"]["crawl_run_id"].startswith("crawl_")
+    assert all(site["updated_at"] == "2026-09-29T07:00:00Z" for site in service.sites.records)
 
 
 def test_refresh_retry_reuses_pending_run_and_root_page() -> None:
@@ -100,8 +106,9 @@ def test_refresh_retry_reuses_pending_run_and_root_page() -> None:
     assert len(runs.created) == 2
     assert len(pages.created) == 2
     assert len(queue.messages) == 4
-    assert queue.messages[0]["payload"]["crawl_run_id"] == (
-        queue.messages[2]["payload"]["crawl_run_id"]
+    assert (
+        queue.messages[0]["payload"]["crawl_run_id"]
+        == (queue.messages[2]["payload"]["crawl_run_id"])
     )
 
 
@@ -126,3 +133,24 @@ def test_refresh_requires_the_scheduler_timestamp() -> None:
 
     with pytest.raises(NightlyRefreshError, match="scheduled_time is required"):
         service.refresh_all(scheduled_time="")
+
+
+def test_refresh_rejects_unexpanded_scheduler_timestamp_before_writing() -> None:
+    service, runs, pages, queue = _service()
+    with pytest.raises(NightlyRefreshError, match="ISO timestamp"):
+        service.refresh_all(scheduled_time="<aws.scheduler.scheduled-time>")
+    assert not runs.created
+    assert not pages.created
+    assert not queue.messages
+
+
+def test_next_night_updates_site_time_and_creates_a_new_run() -> None:
+    service, runs, pages, queue = _service()
+    service.refresh_all(scheduled_time="2026-09-29T07:00:00Z")
+    service.refresh_all(scheduled_time="2026-09-30T07:00:00Z")
+    assert len(runs.created) == len(pages.created) == 4
+    assert (
+        queue.messages[0]["payload"]["crawl_run_id"]
+        != (queue.messages[2]["payload"]["crawl_run_id"])
+    )
+    assert all(site["updated_at"] == "2026-09-30T07:00:00Z" for site in service.sites.records)

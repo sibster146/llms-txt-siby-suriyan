@@ -1,5 +1,8 @@
 from typing import Any
 
+import pytest
+from boto3.dynamodb.conditions import LessThanEquals
+
 from app.clients.dynamodb import DynamoDBConditionNotMetError
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
@@ -28,6 +31,144 @@ class RecordingDynamoDBClient:
     def query(self, key_condition: Any, **kwargs: Any) -> list[dict[str, Any]]:
         self.queries.append({"key_condition": key_condition, **kwargs})
         return self.query_results
+
+
+class ConditionalPageClient(RecordingDynamoDBClient):
+    """Apply the status conditions against a page to simulate interleaved workers."""
+
+    def __init__(self, status: str) -> None:
+        super().__init__()
+        self.page = {"status": status, "parse_started_at": "attempt-1"}
+
+    def matches(self, condition: Any) -> bool:
+        expr = condition.get_expression()
+        values = expr["values"]
+        operator = expr["operator"]
+        if operator == "AND":
+            return all(self.matches(value) for value in values)
+        if operator == "OR":
+            return any(self.matches(value) for value in values)
+        name = values[0].name
+        if operator == "attribute_not_exists":
+            return name not in self.page
+        current = self.page.get(name)
+        if operator == "=":
+            return current == values[1]
+        if operator == "IN":
+            return current in values[1]
+        if operator == "<":
+            return current is not None and current < values[1]
+        raise AssertionError(f"Unsupported condition: {operator}")
+
+    def update_item(self, **kwargs: Any) -> None:
+        if not self.matches(kwargs["condition_expression"]):
+            raise DynamoDBConditionNotMetError("page already advanced")
+        super().update_item(**kwargs)
+        values = kwargs["expression_attribute_values"]
+        if ":status" in values:
+            self.page["status"] = values[":status"]
+        if ":parsing" in values:
+            self.page["status"] = values[":parsing"]
+            self.page["parse_started_at"] = values[":claimed_at"]
+            self.page["parse_lease_expires_at"] = values[":lease_expires_at"]
+        elif "parse_lease_expires_at = :updated_at" in kwargs["update_expression"]:
+            self.page["parse_lease_expires_at"] = values[":updated_at"]
+
+
+@pytest.mark.parametrize("status", ["PARSING", "PARSED", "FAILED"])
+def test_late_crawler_cannot_reset_parser_owned_or_terminal_page(status: str) -> None:
+    client = ConditionalPageClient(status)
+    table = CrawlPagesTable(client)
+    key = {"crawl_run_id": "run", "canonical_url_hash": "hash"}
+    table.mark_queued(**key, updated_at="late")
+    assert not table.mark_parse_pending(**key, updated_at="late")
+    with pytest.raises(DynamoDBConditionNotMetError):
+        table.mark_crawling(**key, updated_at="late")
+    with pytest.raises(DynamoDBConditionNotMetError):
+        table.mark_crawled(
+            **key,
+            raw_html_s3_key="raw/key",
+            final_url="https://example.com",
+            http_status=200,
+            content_type="text/html",
+            content_length=10,
+            raw_html_hash="hash",
+            html_unchanged=False,
+            crawled_at="late",
+            etag=None,
+            last_modified=None,
+        )
+    for terminal in (False, True):
+        assert not table.record_failure(
+            **key,
+            error_message="late failure",
+            attempt=2,
+            terminal=terminal,
+            updated_at="late",
+        )
+    assert client.page["status"] == status
+    assert not client.updates
+
+
+def test_parser_completion_cannot_be_repeated_or_reset_by_failure() -> None:
+    client = ConditionalPageClient("PARSING")
+    table = CrawlPagesTable(client)
+    key = {"crawl_run_id": "run", "canonical_url_hash": "hash"}
+    completion = dict(
+        **key, parsed_content_s3_key="parsed/key", parsed_at="done", claimed_at="attempt-1"
+    )
+    table.mark_parsed(**completion)
+    with pytest.raises(DynamoDBConditionNotMetError):
+        table.mark_parsed(**completion)
+    with pytest.raises(DynamoDBConditionNotMetError):
+        table.record_parse_failure(
+            **key,
+            error_message="late error",
+            attempt=1,
+            terminal=False,
+            updated_at="later",
+            claimed_at="attempt-1",
+        )
+    assert client.page["status"] == "PARSED"
+
+
+def test_parser_retry_stays_parsing_and_fences_previous_attempt() -> None:
+    client = ConditionalPageClient("PARSING")
+    table = CrawlPagesTable(client)
+    key = {"crawl_run_id": "run", "canonical_url_hash": "hash"}
+    table.record_parse_failure(
+        **key,
+        error_message="retryable",
+        attempt=1,
+        terminal=False,
+        updated_at="2026-09-29T10:00:00+00:00",
+        claimed_at="attempt-1",
+    )
+    assert client.page["status"] == "PARSING"
+    assert table.claim_parsing(
+        **key,
+        claimed_at="2026-09-29T10:00:30+00:00",
+        lease_expires_at="2026-09-29T10:02:30+00:00",
+    )
+    with pytest.raises(DynamoDBConditionNotMetError):
+        table.mark_parsed(
+            **key,
+            parsed_content_s3_key="key",
+            parsed_at="late",
+            claimed_at="attempt-1",
+        )
+
+
+def test_parser_cannot_claim_crawled_page_until_parse_pending() -> None:
+    client = ConditionalPageClient("CRAWLED")
+    table = CrawlPagesTable(client)
+    key = {"crawl_run_id": "run", "canonical_url_hash": "hash"}
+    claim = dict(**key, claimed_at="start", lease_expires_at="until")
+    assert not table.claim_parsing(**claim)
+    assert table.mark_parse_pending(**key, updated_at="queued")
+    assert table.claim_parsing(**claim)
+    assert not table.mark_parse_pending(**key, updated_at="late")
+    assert not table.claim_parsing(**claim)
 
 
 def test_sites_table_upserts_the_current_crawl() -> None:
@@ -223,7 +364,8 @@ def test_crawl_runs_table_claims_generation_atomically() -> None:
 
     assert claimed
     assert dynamodb.updates[0]["expression_attribute_values"][":status"] == "GENERATING"
-    assert dynamodb.updates[0]["condition_expression"] is not None
+    condition = dynamodb.updates[0]["condition_expression"]
+    assert any(isinstance(value, LessThanEquals) for value in condition.get_expression()["values"])
 
 
 def test_crawl_runs_table_rejects_a_duplicate_generation_claim() -> None:

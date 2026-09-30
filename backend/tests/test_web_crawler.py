@@ -12,6 +12,7 @@ from app.services.web_crawler import (
     ResponseTooLargeError,
     RobotsDeniedError,
     WebCrawlerService,
+    _run_counts_complete,
     fetch_html_page,
 )
 
@@ -38,8 +39,9 @@ class FakeCrawlPagesTable:
     def mark_crawled(self, **kwargs: Any) -> None:
         self.calls.append(("mark_crawled", kwargs))
 
-    def mark_parse_pending(self, **kwargs: Any) -> None:
+    def mark_parse_pending(self, **kwargs: Any) -> bool:
         self.calls.append(("mark_parse_pending", kwargs))
+        return True
 
     def record_failure(self, **kwargs: Any) -> bool:
         self.calls.append(("record_failure", kwargs))
@@ -115,6 +117,10 @@ def _message(url: str = "https://example.com/") -> dict[str, Any]:
             "depth": 0,
         },
     }
+
+
+def test_negative_pending_count_is_complete() -> None:
+    assert _run_counts_complete({"pending_page_count": -1})
 
 
 def _service(
@@ -259,8 +265,8 @@ def test_crawler_reuses_stored_html_when_queue_delivery_is_retried() -> None:
     assert json.loads(sqs.messages[0]["MessageBody"])["payload"]["unchanged"] is True
 
 
-def test_crawler_does_not_requeue_parsing_when_it_was_already_queued() -> None:
-    crawl_pages = FakeCrawlPagesTable(existing={"status": "PARSE_PENDING"})
+def test_crawler_does_not_requeue_a_page_already_being_parsed() -> None:
+    crawl_pages = FakeCrawlPagesTable(existing={"status": "PARSING"})
     crawl_runs = FakeCrawlRunsTable()
 
     _service(
@@ -272,6 +278,26 @@ def test_crawler_does_not_requeue_parsing_when_it_was_already_queued() -> None:
 
     assert crawl_pages.calls == []
     assert crawl_runs.calls == []
+
+
+def test_crawler_retries_send_after_stopping_at_parse_pending() -> None:
+    pages = FakeCrawlPagesTable(
+        existing={
+            "status": "PARSE_PENDING",
+            "raw_html_s3_key": "raw/site-1/crawl-1/page.html",
+        }
+    )
+
+    class CheckingQueue(FakeSQSClient):
+        def send_message(self, **kwargs: Any) -> None:
+            assert pages.calls[-1][0] == "mark_parse_pending"
+            super().send_message(**kwargs)
+
+    queue = CheckingQueue()
+    s3 = FakeS3Client()
+    _service(pages, s3, queue).process_message(_message(), attempt=2)
+    assert len(queue.messages) == 1
+    assert not s3.objects
 
 
 def test_crawler_retries_generation_check_for_an_already_failed_page() -> None:
