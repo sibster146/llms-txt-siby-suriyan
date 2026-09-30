@@ -4,6 +4,16 @@ This opt-in test uses real AWS resources and model calls, not mocks. Both deploy
 workflows run it after provisioning. Dev starts FastAPI in a subprocess on the runner;
 prod uses the deployed CloudFront HTTPS endpoint after ECS becomes stable.
 
+Job order:
+- Dev: Create Infrastructure -> Run Integration Tests.
+- Prod: Create Infrastructure -> Deploy Backend -> Deploy Frontend -> Run Integration Tests.
+
+Each job authenticates to AWS independently. Infrastructure outputs are passed as a
+one-day GitHub artifact, so downstream jobs do not need to initialize Terraform.
+The infrastructure job builds the backend image before Terraform references it;
+Deploy Backend explicitly rolls out the resulting task definition and checks ECS
+stability. Deploy Frontend waits for CloudFront invalidation before tests start.
+
 The test signs in through `POST /auth/guest`, submits `https://www.roblox.com/`, and
 polls the returned crawl ID every four seconds for up to 20 minutes. It passes only
 when the run is COMPLETED, all pages are terminal, at least one page succeeded, and

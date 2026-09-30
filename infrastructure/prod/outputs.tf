@@ -113,6 +113,11 @@ output "backend_ecs_service_name" {
   value       = module.backend_ecs.service_name
 }
 
+output "backend_task_definition_arn" {
+  description = "Task definition to roll out in the backend deployment job."
+  value       = module.backend_ecs.task_definition_arn
+}
+
 output "frontend_bucket_name" {
   description = "S3 bucket containing the compiled production frontend."
   value       = module.frontend_cdn.bucket_name

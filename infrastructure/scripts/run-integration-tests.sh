@@ -8,7 +8,11 @@ case "$environment" in
 esac
 
 cd "$(dirname "$0")/../.."
-outputs=$(terraform -chdir="infrastructure/${environment}" output -json)
+if [[ -n "${TERRAFORM_OUTPUTS_FILE:-}" ]]; then
+  outputs=$(jq -e '.' "${TERRAFORM_OUTPUTS_FILE}")
+else
+  outputs=$(terraform -chdir="infrastructure/${environment}" output -json)
+fi
 tf_output() {
   jq -er --arg name "$1" '.[$name].value' <<< "$outputs"
 }

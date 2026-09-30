@@ -16,10 +16,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Creating Infrastructure
+  infrastructure:
+    name: Create Infrastructure
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 60
     environment: dev
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -164,6 +164,42 @@ jobs:
           echo "Lambda: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_lambda_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Schedule: $(terraform -chdir=infrastructure/dev output -raw nightly_refresh_schedule_name)" >> "${GITHUB_STEP_SUMMARY}"
           echo "Image: ${NIGHTLY_REFRESH_IMAGE_URI}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Export infrastructure outputs
+        run: terraform -chdir=infrastructure/dev output -json > terraform-outputs-dev.json
+
+      - name: Share infrastructure outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs-dev
+          path: terraform-outputs-dev.json
+          retention-days: 1
+
+  integration_tests:
+    name: Run Integration Tests
+    needs: infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TERRAFORM_OUTPUTS_FILE: .deployment/terraform-outputs-dev.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: integration-dev-${{ github.run_id }}
+
+      - name: Download infrastructure outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-outputs-dev
+          path: .deployment
 
       - name: Set up Python for integration tests
         uses: actions/setup-python@v6
