@@ -473,6 +473,156 @@ def test_generator_failure_is_atomic_and_idempotent(workflow):
     assert w.runs.get(site_id="site", crawl_run_id="run") == failed
 
 
+def test_children_fail_after_two_attempts_with_delayed_retry(workflow, monkeypatch):
+    w = workflow
+    register = Mock(side_effect=RuntimeError("child registration unavailable"))
+    monkeypatch.setattr(w.service, "_register_children", register)
+    w.service.process_message(w.message)
+    page = root(w)
+    assert page["children_attempt_count"] == 1
+    assert page["attempt_count"] == 1
+    assert page["parsed_content_s3_key"]
+    assert w.queue.send_json.call_args.kwargs["delay_seconds"] == 30
+    with pytest.raises(WorkDeferred):
+        w.service.process_message(w.message)
+    assert root(w)["children_attempt_count"] == 1
+    expire(w, page)
+    w.service.process_dead_letter(w.message)
+    assert root(w)["children_attempt_count"] == 2
+    assert root(w)["attempt_count"] == 1
+    assert root(w)["status"] == "FAILED"
+    assert w.runs.get(site_id="site", crawl_run_id="run")["status"] == "FAILED"
+    assert register.call_count == 2
+    w.fetch.assert_called_once()
+
+
+def test_discovery_contention_refunds_children_attempt(workflow):
+    w = workflow
+    w.fetch.return_value = FetchedPage(
+        b'<html><a href="/child">Child</a></html>', "text/html", "https://example.com/", 200
+    )
+    assert w.runs.acquire_discovery_lock(
+        site_id="site", crawl_run_id="run", token="other", now=now(), expires_at=after(30)
+    )
+    for _ in range(3):
+        w.service.process_message(w.message)
+        page = w.pages.get(**CrawlPagesTable.key(w.message["payload"]))
+        assert page["children_attempt_count"] == 0
+        assert page["status"] == "CRAWLING_AND_PARSING"
+        expire(w, page)
+    w.runs.release_discovery_lock(site_id="site", crawl_run_id="run", token="other")
+    w.service.process_message(w.message)
+    page = w.pages.get(**CrawlPagesTable.key(w.message["payload"]))
+    assert page["status"] == "COMPLETED"
+    assert page["children_attempt_count"] == 1
+    w.fetch.assert_called_once()
+
+
+@pytest.mark.parametrize("via_recovery", [True, False])
+def test_children_timeout_finalized_only_after_lease_expiry(workflow, monkeypatch, via_recovery):
+    w = workflow
+    monkeypatch.setattr(w.service, "_register_children", Mock(side_effect=SystemExit("timeout")))
+    for attempt in (1, 2):
+        with pytest.raises(SystemExit):
+            w.service.process_message(w.message)
+        assert root(w)["children_attempt_count"] == attempt
+        w.service.recover()
+        assert root(w)["status"] == "CRAWLING_AND_PARSING"
+        with pytest.raises(WorkDeferred):
+            w.service.process_message(w.message)
+        expire(w, root(w))
+    if via_recovery:
+        w.service.recover()
+    else:
+        w.service.process_dead_letter(w.message)
+    assert root(w)["status"] == "FAILED"
+    assert "children" in root(w)["last_error"].lower()
+    assert w.runs.get(site_id="site", crawl_run_id="run")["status"] == "FAILED"
+
+
+def test_failed_parent_keeps_children_recoverable_until_generation(workflow):
+    w = workflow
+    w.fetch.return_value = FetchedPage(
+        b'<html><a href="/child">Child</a></html>', "text/html", "https://example.com/", 200
+    )
+    w.queue.send_json.side_effect = SQSClientError("queue unavailable")
+    with pytest.raises(SQSClientError):
+        w.service.process_message(w.message)
+    parent = w.pages.get(**CrawlPagesTable.key(w.message["payload"]))
+    expire(w, parent)
+    w.service.process_message(w.message)
+    parent = w.pages.get(**CrawlPagesTable.key(w.message["payload"]))
+    assert parent["status"] == "FAILED"
+    assert parent["children_attempt_count"] == 2
+    assert w.pages.counts_for_run("run")["pending_page_count"] == 1
+    w.generation.send_json.assert_not_called()
+    w.queue.send_json.side_effect = None
+    w.service.recover()
+    child_message = w.queue.send_json.call_args.args[0]
+    assert child_message["payload"]["url"].endswith("/child")
+    w.fetch.return_value = FetchedPage(
+        b"<html>Child</html>", "text/html", "https://example.com/child", 200
+    )
+    w.service.process_message(child_message)
+    assert w.runs.get(site_id="site", crawl_run_id="run")["status"] == "GENERATING"
+    w.generation.send_json.assert_called_once()
+
+
+def test_legacy_checkpoint_claim_initializes_children_counter(workflow):
+    w = workflow
+    page = claim(w)
+    w.tables["pages"].update_item(
+        key=w.pages.key(page),
+        update_expression="SET parsed_content_s3_key = :key REMOVE children_attempt_count",
+        expression_attribute_values={":key": "parsed/result.json"},
+    )
+    expire(w, page)
+    page = claim(w, "resume")
+    assert page["children_attempt_count"] == 1
+    assert page["attempt_count"] == 1
+
+
+def test_stale_recovery_cannot_fail_refunded_children_attempt(workflow):
+    w = workflow
+    page = claim(w)
+    w.pages.save_result(
+        page,
+        token="worker",
+        now=now(),
+        result={"parsed_content_s3_key": "parsed/result.json", "children_attempt_count": 2},
+    )
+    stale = root(w)
+    w.pages.retry(
+        stale,
+        token="worker",
+        now=now(),
+        retry_after=after(30),
+        error="discovery lock busy",
+        refund_children_attempt=True,
+    )
+    expire(w, stale)
+    assert not w.pages.fail_abandoned(stale, now=now(), error="stale recovery")
+    assert root(w)["status"] == "CRAWLING_AND_PARSING"
+
+
+def test_stale_preparse_claim_cannot_skip_children_counter(workflow):
+    w = workflow
+    stale = claim(w)
+    w.pages.save_result(
+        stale, token="worker", now=now(), result={"parsed_content_s3_key": "parsed/result.json"}
+    )
+    expire(w, stale)
+    assert not w.pages.claim(
+        stale,
+        runs_table_name="runs",
+        token="stale",
+        now=now(),
+        expires_at=after(150),
+        max_attempts=2,
+    )
+    assert claim(w, "fresh")["children_attempt_count"] == 1
+
+
 def test_generator_failure_cannot_overwrite_completed_or_create_missing_run(workflow):
     w = workflow
     w.service.process_message(w.message)

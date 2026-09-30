@@ -217,6 +217,19 @@ def _service(
     return service, sites, runs, versions, s3, events
 
 
+@pytest.mark.parametrize("configured_limit,expected_limit", [(30, 20), (20, 20), (5, 5)])
+def test_direct_prompt_limits_sections_and_links(configured_limit, expected_limit) -> None:
+    from app.services.llms_txt_generator import _direct_generation_prompt
+
+    prompt = _direct_generation_prompt("https://example.com/", [], configured_limit)
+
+    assert "at most 5 H2 sections, including Optional" in prompt
+    assert "at most 4 links per section" in prompt
+    assert f"at most {expected_limit} links total" in prompt
+    assert "600 to 1,200 tokens" in prompt
+    assert "1,200 to 2,500" not in prompt
+
+
 def test_generator_persists_kimi_output_before_completing() -> None:
     bedrock = FakeBedrockClient(_valid_content())
     service, sites, runs, versions, s3, events = _service(bedrock)

@@ -68,13 +68,19 @@ and dispatch a delayed message for 30 seconds later. Two actual attempts are all
 404s, oversized responses, unsafe URLs, unsupported content, and robots denial fail
 without a retry. A timeout is recovered after its lease expires, not exactly 30 seconds later.
 If parsing has already succeeded, retrying child registration/dispatch does not consume
-another fetch/parse attempt.
+another fetch/parse attempt. Instead, `children_attempt_count` tracks a separate limit
+of two attempts, incremented atomically. Caught failures retry after 30 seconds;
+timed-out attempts are recovered after the lease expires. Waiting for another worker's
+discovery lock refunds the children attempt. Existing records without this attribute
+start at zero; no table migration is required.
 
 A short `discovery_lock_token` / `discovery_lock_expires_at` pair on CrawlRuns
 serializes child registration. Under that lock, the worker queries all existing pages,
 deduplicates URLs, and inserts only children that fit the cap (including the root).
 Each transaction checks both the run lock and parent ownership. Network fetches and
-SQS sends occur outside the lock. The parent stays active until child dispatch finishes.
+SQS sends occur outside the lock. The parent stays active until child dispatch finishes
+or its children attempts are exhausted. An exhausted parent becomes FAILED, but its
+already-registered children remain recoverable and must finish before generation.
 
 No discovered/completed/failed/pending counters are stored on CrawlRuns. API responses
 derive these counts by querying CrawlPages with consistent reads and pagination.
@@ -173,7 +179,7 @@ The following Terraform variables control generator behavior and capacity:
 
 - `generator_model_id` (default: `us.moonshotai.kimi-k3`)
 - `generator_max_input_pages` (default: `500`)
-- `generator_max_output_links` (default: `30`)
+- `generator_max_output_links` (default: `20`; prompt requests at most 5 sections with 4 links each)
 - `generator_max_excerpt_chars` (default: `1000`)
 - `generator_max_model_tokens` (default: `4000`)
 - `generator_maximum_concurrency` (default: `2`)
