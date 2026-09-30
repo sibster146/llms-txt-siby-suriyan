@@ -1,19 +1,87 @@
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
 
+import boto3
 import pytest
+from botocore.awsrequest import AWSResponse
 from botocore.exceptions import ClientError
 
 from app.clients.dynamodb import (
     DynamoDBClient,
     DynamoDBClientError,
     DynamoDBConditionNotMetError,
-    dataclass_to_dynamodb_item,
+    to_dynamodb_value,
 )
 from app.configs.config import Settings
+from app.tables.crawl_pages import CrawlPagesTable
+
+
+def test_failure_transaction_serializes_page_and_run_updates_without_network() -> None:
+    resource = boto3.resource(
+        "dynamodb",
+        region_name="us-east-1",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+    requests = []
+
+    def capture(params: dict[str, Any], **_: Any) -> tuple[Any, dict]:
+        requests.append(json.loads(params["body"]))
+        return AWSResponse("https://example.com", 200, {}, None), {}
+
+    resource.meta.client.meta.events.register("before-call.dynamodb.TransactWriteItems", capture)
+    table = CrawlPagesTable(DynamoDBClient(resource.Table("pages")))
+    assert table.claim(
+        {
+            "site_id": "site",
+            "crawl_run_id": "run",
+            "canonical_url_hash": "hash",
+            "attempt_count": 0,
+        },
+        runs_table_name="runs",
+        token="worker",
+        now="now",
+        expires_at="later",
+        max_attempts=2,
+    )
+    run, page = [item["Update"] for item in requests[0]["TransactItems"]]
+    assert page["TableName"] == "pages"
+    assert page["Key"]["crawl_run_id"] == {"S": "run"}
+    assert page["ExpressionAttributeValues"][":next"] == {"N": "1"}
+    assert page["ExpressionAttributeValues"][":token"] == {"S": "worker"}
+    assert run["TableName"] == "runs"
+    assert "pending_page_count" not in run["UpdateExpression"]
+
+
+@pytest.mark.parametrize(
+    "codes,expected",
+    [
+        (["ConditionalCheckFailed", "None"], DynamoDBConditionNotMetError),
+        (["None", "ConditionalCheckFailed"], DynamoDBConditionNotMetError),
+        (["TransactionConflict", "None"], DynamoDBClientError),
+        (["ConditionalCheckFailed", "ProvisionedThroughputExceeded"], DynamoDBClientError),
+    ],
+)
+def test_transaction_conflicts_are_retried_not_treated_as_duplicates(codes, expected) -> None:
+    from types import SimpleNamespace
+
+    def fail(**_: Any) -> None:
+        raise ClientError(
+            {
+                "Error": {"Code": "TransactionCanceledException"},
+                "CancellationReasons": [{"Code": code} for code in codes],
+            },
+            "TransactWriteItems",
+        )
+
+    table = SimpleNamespace(meta=SimpleNamespace(client=SimpleNamespace(transact_write_items=fail)))
+    with pytest.raises(expected) as error:
+        DynamoDBClient(table).transact_write([])
+    assert type(error.value) is expected
 
 
 class Status(Enum):
@@ -36,8 +104,8 @@ class FakeTable:
         self.item = Item
 
 
-def test_dataclass_to_dynamodb_item_converts_domain_values() -> None:
-    item = dataclass_to_dynamodb_item(
+def test_to_dynamodb_value_converts_dataclass_domain_values() -> None:
+    item = to_dynamodb_value(
         CrawlRun(
             crawl_run_id="run-1",
             status=Status.queued,

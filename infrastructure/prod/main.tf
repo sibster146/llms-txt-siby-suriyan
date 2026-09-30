@@ -32,9 +32,8 @@ module "sqs" {
 
   environment                        = "prod"
   project_name                       = var.project_name
-  max_receive_count                  = var.parser_max_attempts
-  crawl_visibility_timeout_seconds   = 30
-  crawl_max_receive_count            = 2
+  crawl_visibility_timeout_seconds   = var.crawler_timeout_seconds * 6
+  crawl_max_receive_count            = 5
   llm_txt_visibility_timeout_seconds = 1800
   llm_txt_max_receive_count          = 4
 }
@@ -104,9 +103,16 @@ module "web_crawler_lambda" {
   environment             = "prod"
   project_name            = var.project_name
   image_uri               = var.web_crawler_image_uri
+  crawl_queue_url         = module.sqs.queue_urls.crawl
+  crawl_dlq_url           = module.sqs.dead_letter_queue_urls.crawl
+  maximum_concurrency     = var.crawler_maximum_concurrency
+  memory_size             = var.crawler_memory_size
+  max_depth               = var.crawler_max_depth
+  max_discovered_pages    = var.crawler_max_discovered_pages
+  max_links_per_page      = var.crawler_max_links_per_page
+  retry_delay_seconds     = var.crawler_retry_delay_seconds
   crawl_queue_arn         = module.sqs.queue_arns.crawl
-  parse_queue_arn         = module.sqs.queue_arns.parse
-  parse_queue_url         = module.sqs.queue_urls.parse
+  crawl_dlq_arn           = module.sqs.dead_letter_queue_arns.crawl
   llm_txt_queue_arn       = module.sqs.queue_arns.llm_txt
   llm_txt_queue_url       = module.sqs.queue_urls.llm_txt
   crawl_pages_table_name  = module.dynamodb.table_names.crawl_pages
@@ -117,39 +123,11 @@ module "web_crawler_lambda" {
   sites_table_arn         = module.dynamodb.table_arns.sites
   application_bucket_name = module.s3.bucket_name
   application_bucket_arn  = module.s3.bucket_arn
-  max_attempts            = 2
-  timeout_seconds         = 25
+  max_attempts            = var.crawler_max_attempts
+  timeout_seconds         = var.crawler_timeout_seconds
   request_timeout_seconds = 10
   max_response_bytes      = 5242880
   user_agent              = "llms-txt-crawler/1.0 (+https://github.com/tryBaskt/llms-txt-siby-suriyan)"
-}
-
-module "html_parser_lambda" {
-  source = "../modules/html_parser_lambda"
-
-  environment             = "prod"
-  project_name            = var.project_name
-  image_uri               = var.html_parser_image_uri
-  parse_queue_arn         = module.sqs.queue_arns.parse
-  crawl_queue_arn         = module.sqs.queue_arns.crawl
-  crawl_queue_url         = module.sqs.queue_urls.crawl
-  llm_txt_queue_arn       = module.sqs.queue_arns.llm_txt
-  llm_txt_queue_url       = module.sqs.queue_urls.llm_txt
-  crawl_pages_table_name  = module.dynamodb.table_names.crawl_pages
-  crawl_pages_table_arn   = module.dynamodb.table_arns.crawl_pages
-  crawl_runs_table_name   = module.dynamodb.table_names.crawl_runs
-  crawl_runs_table_arn    = module.dynamodb.table_arns.crawl_runs
-  application_bucket_name = module.s3.bucket_name
-  application_bucket_arn  = module.s3.bucket_arn
-  parser_version          = "v1"
-  max_attempts            = var.parser_max_attempts
-  retry_delay_seconds     = var.parser_retry_delay_seconds
-  parse_queue_url         = module.sqs.queue_urls.parse
-  max_depth               = var.parser_max_depth
-  max_discovered_pages    = var.parser_max_discovered_pages
-  max_links_per_page      = var.parser_max_links_per_page
-  maximum_concurrency     = var.parser_maximum_concurrency
-  memory_size             = var.parser_memory_size
 }
 
 module "llms_txt_generator_lambda" {

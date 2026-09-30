@@ -23,17 +23,6 @@ variable "crawl_queue_arn" {
   type        = string
   description = "ARN of the queue that triggers the crawler."
 }
-
-variable "parse_queue_arn" {
-  type        = string
-  description = "ARN of the parser queue."
-}
-
-variable "parse_queue_url" {
-  type        = string
-  description = "URL of the parser queue."
-}
-
 variable "llm_txt_queue_arn" {
   type        = string
   description = "ARN of the llms.txt generator queue."
@@ -104,8 +93,8 @@ variable "max_response_bytes" {
 
 variable "max_attempts" {
   type        = number
-  description = "Number of deliveries before SQS moves a message to the dead-letter queue."
-  default     = 4
+  description = "Maximum actual page processing attempts, independent of SQS delivery count."
+  default     = 2
 }
 
 variable "memory_size" {
@@ -117,7 +106,7 @@ variable "memory_size" {
 variable "timeout_seconds" {
   type        = number
   description = "Lambda invocation timeout."
-  default     = 45
+  default     = 120
 }
 
 variable "log_retention_days" {
@@ -130,4 +119,54 @@ variable "tags" {
   description = "Additional tags applied to Lambda resources."
   type        = map(string)
   default     = {}
+}
+variable "crawl_dlq_arn" {
+  type        = string
+  description = "Crawl dead-letter queue consumed to finalize abandoned pages."
+}
+
+variable "maximum_concurrency" {
+  type        = number
+  default     = 3
+  description = "Maximum concurrent invocations from the crawl queue."
+}
+
+variable "crawl_queue_url" {
+  type        = string
+  description = "Crawl queue URL."
+}
+
+variable "crawl_dlq_url" {
+  type        = string
+  description = "Crawl DLQ URL."
+}
+
+variable "retry_delay_seconds" {
+  type        = number
+  description = "Delay after a caught retryable failure."
+  default     = 30
+}
+
+variable "max_depth" {
+  type        = number
+  description = "Maximum link depth."
+  default     = 2
+}
+
+variable "max_discovered_pages" {
+  type        = number
+  description = "Maximum pages per run including root."
+  default     = 500
+}
+
+variable "max_links_per_page" {
+  type        = number
+  description = "Maximum links extracted per page."
+  default     = 1000
+}
+
+variable "parser_version" {
+  type        = string
+  description = "Parsed content schema version."
+  default     = "v2"
 }

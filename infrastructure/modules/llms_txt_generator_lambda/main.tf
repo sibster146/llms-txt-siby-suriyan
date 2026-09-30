@@ -35,7 +35,7 @@ data "aws_iam_policy_document" "permissions" {
       "sqs:GetQueueAttributes",
       "sqs:ReceiveMessage",
     ]
-    resources = [var.llm_txt_queue_arn]
+    resources = [var.llm_txt_queue_arn, var.llm_txt_dlq_arn]
   }
 
   statement {
@@ -134,6 +134,7 @@ resource "aws_lambda_function" "this" {
       GENERATOR_MAX_ATTEMPTS        = tostring(var.max_attempts)
       GENERATOR_RETRY_DELAY_SECONDS = tostring(var.retry_delay_seconds)
       LLM_TXT_DLQ_URL               = var.llm_txt_dlq_url
+      LLM_TXT_DLQ_ARN               = var.llm_txt_dlq_arn
       LLM_TXT_QUEUE_URL             = var.llm_txt_queue_url
       LLM_TXT_VERSIONS_TABLE        = var.llm_txt_versions_table_name
       SITES_TABLE                   = var.sites_table_name
@@ -160,5 +161,17 @@ resource "aws_lambda_event_source_mapping" "llm_txt_queue" {
 
   scaling_config {
     maximum_concurrency = var.maximum_concurrency
+  }
+}
+
+resource "aws_lambda_event_source_mapping" "llm_txt_dlq" {
+  event_source_arn        = var.llm_txt_dlq_arn
+  function_name           = aws_lambda_function.this.arn
+  enabled                 = true
+  batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+
+  scaling_config {
+    maximum_concurrency = 2
   }
 }

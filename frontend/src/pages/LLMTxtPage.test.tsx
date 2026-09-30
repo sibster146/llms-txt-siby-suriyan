@@ -107,6 +107,34 @@ describe('LLMTxtPage', () => {
     })
   })
 
+  it.each(['CRAWLING_AND_PARSING', 'GENERATING'])(
+    'fetches and polls a scheduled %s run when the file page is reopened', async (status) => {
+      let poll: (() => Promise<void>) | undefined
+      vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+        poll = handler as () => Promise<void>
+        return 1
+      })
+      const props = { onBack: vi.fn(), onSignOut: vi.fn(), siteId: 'site-1' }
+      const first = render(<LLMTxtPage {...props} />)
+      await screen.findByText('# Current file')
+      first.unmount()
+      const detail = await apiMocks.getSiteDetail('site-1')
+      const crawl = {
+        site_id: 'site-1', crawl_run_id: 'scheduled-run', status,
+        discovered_page_count: 12, completed_page_count: 9,
+        failed_page_count: 1, pending_page_count: 2,
+      }
+      apiMocks.getSiteDetail.mockResolvedValue({ ...detail, latest_crawl: crawl })
+      apiMocks.getCrawlStatus.mockResolvedValue(crawl)
+      render(<LLMTxtPage {...props} />)
+      await screen.findByText('# Current file')
+      expect(screen.getByText('12')).toBeTruthy()
+      expect(screen.getByText('10')).toBeTruthy()
+      await act(async () => { await poll?.() })
+      expect(apiMocks.getCrawlStatus).toHaveBeenCalledWith('site-1', 'scheduled-run')
+    },
+  )
+
   it('polls an active crawl and combines parsed and failed pages as completed', async () => {
     let poll: (() => Promise<void>) | null = null
     vi.spyOn(window, 'setInterval').mockImplementation((handler) => {

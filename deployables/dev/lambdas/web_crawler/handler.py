@@ -19,19 +19,21 @@ if str(BACKEND_PATH) not in sys.path:
 
 from app.clients.dynamodb import DynamoDBClient
 from app.clients.s3 import S3Client
-from app.services.web_crawler import CrawlMessageError, WebCrawlerService
+from app.clients.sqs import SQSClient
+from app.services.crawl_and_parse import CrawlAndParseService, CrawlMessageError
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 from app.tables.sites import SitesTable
 
 
 @lru_cache
-def _web_crawler_service() -> WebCrawlerService:
+def _web_crawler_service() -> CrawlAndParseService:
     region = _required_env("AWS_REGION")
     session = boto3.Session(region_name=region)
     dynamodb = session.resource("dynamodb", region_name=region)
 
-    return WebCrawlerService(
+    sqs = session.client("sqs", region_name=region)
+    return CrawlAndParseService(
         crawl_pages=CrawlPagesTable(
             DynamoDBClient(table=dynamodb.Table(_required_env("CRAWL_PAGES_TABLE")))
         ),
@@ -43,9 +45,14 @@ def _web_crawler_service() -> WebCrawlerService:
             client=session.client("s3", region_name=region),
             bucket_name=_required_env("APPLICATION_S3_BUCKET"),
         ),
-        sqs_client=session.client("sqs", region_name=region),
-        parse_queue_url=_required_env("PARSE_QUEUE_URL"),
-        llm_txt_queue_url=_required_env("LLM_TXT_QUEUE_URL"),
+        crawl_queue=SQSClient(sqs, _required_env("CRAWL_QUEUE_URL")),
+        llm_txt_queue=SQSClient(sqs, _required_env("LLM_TXT_QUEUE_URL")),
+        retry_delay_seconds=int(_required_env("CRAWLER_RETRY_DELAY_SECONDS")),
+        lease_seconds=int(_required_env("CRAWLER_LEASE_SECONDS")),
+        parser_version=_required_env("PARSER_VERSION"),
+        max_depth=int(_required_env("CRAWLER_MAX_DEPTH")),
+        max_links_per_page=int(_required_env("CRAWLER_MAX_LINKS_PER_PAGE")),
+        max_discovered_pages=int(_required_env("CRAWLER_MAX_DISCOVERED_PAGES")),
         user_agent=_required_env("CRAWLER_USER_AGENT"),
         request_timeout_seconds=float(_required_env("CRAWLER_REQUEST_TIMEOUT_SECONDS")),
         max_response_bytes=int(_required_env("CRAWLER_MAX_RESPONSE_BYTES")),
@@ -61,8 +68,10 @@ def _process_record(record: dict[str, Any]) -> None:
     if not isinstance(message, dict):
         raise CrawlMessageError("Queued crawl message must be an object")
 
-    receive_count = int(record.get("attributes", {}).get("ApproximateReceiveCount", "1"))
-    _web_crawler_service().process_message(message, attempt=receive_count)
+    if record.get("eventSourceARN") == _required_env("CRAWL_DLQ_ARN"):
+        _web_crawler_service().process_dead_letter(message)
+    else:
+        _web_crawler_service().process_message(message)
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -70,6 +79,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if event.get("action") == "warmup":
         _web_crawler_service()
         return {"warmed": True}
+
+    if event.get("action") == "recover_crawls":
+        _web_crawler_service().recover(remaining_ms=context.get_remaining_time_in_millis)
+        return {"recovered": True}
 
     batch_item_failures = []
     for record in event.get("Records", []):
@@ -86,6 +99,26 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     }
                 )
             )
+            try:
+                region = _required_env("AWS_REGION")
+                boto3.Session(region_name=region).client("sqs").change_message_visibility(
+                    QueueUrl=_required_env(
+                        "CRAWL_DLQ_URL"
+                        if record.get("eventSourceARN") == _required_env("CRAWL_DLQ_ARN")
+                        else "CRAWL_QUEUE_URL"
+                    ),
+                    ReceiptHandle=record["receiptHandle"],
+                    VisibilityTimeout=int(_required_env("CRAWLER_RETRY_DELAY_SECONDS")),
+                )
+            except Exception as visibility_error:
+                print(
+                    json.dumps(
+                        {
+                            "message": "Retry visibility update failed",
+                            "error": str(visibility_error),
+                        }
+                    )
+                )
             batch_item_failures.append({"itemIdentifier": record.get("messageId", "")})
 
     return {"batchItemFailures": batch_item_failures}

@@ -1,120 +1,85 @@
+import contextlib
 from typing import Any
 
 from boto3.dynamodb.conditions import Attr, Key
 
 from app.clients.dynamodb import DynamoDBClient, DynamoDBConditionNotMetError
 
+TERMINAL_PAGE_STATUSES = {"COMPLETED", "FAILED"}
 LATEST_PAGE_INDEX = "site_url_crawled_at_index"
 
 
 class CrawlPagesTable:
-    """Persistence operations for pages discovered during a crawl."""
+    """Page state and fenced writes. No persisted aggregate counters."""
 
     def __init__(self, dynamodb: DynamoDBClient) -> None:
         self.dynamodb = dynamodb
 
-    def create(
-        self,
+    @staticmethod
+    def new_item(
         *,
         crawl_run_id: str,
         canonical_url_hash: str,
         site_id: str,
         url: str,
+        root_url: str,
         depth: int,
         created_at: str,
         parent_url: str | None = None,
-    ) -> None:
-        self.dynamodb.put_item(
-            self._new_page_item(
-                crawl_run_id=crawl_run_id,
-                canonical_url_hash=canonical_url_hash,
-                site_id=site_id,
-                url=url,
-                depth=depth,
-                created_at=created_at,
-                parent_url=parent_url,
-                status="PENDING",
-            ),
-            condition_expression=Attr("crawl_run_id").not_exists(),
-        )
-
-    def create_if_absent(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        site_id: str,
-        url: str,
-        depth: int,
-        created_at: str,
-        parent_url: str,
-    ) -> bool:
-        try:
-            self.dynamodb.put_item(
-                self._new_page_item(
-                    crawl_run_id=crawl_run_id,
-                    canonical_url_hash=canonical_url_hash,
-                    site_id=site_id,
-                    url=url,
-                    depth=depth,
-                    created_at=created_at,
-                    parent_url=parent_url,
-                    status="DISCOVERED",
-                ),
-                condition_expression=(
-                    Attr("crawl_run_id").not_exists() & Attr("canonical_url_hash").not_exists()
-                ),
-            )
-        except DynamoDBConditionNotMetError:
-            return False
-        return True
-
-    @staticmethod
-    def _new_page_item(
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        site_id: str,
-        url: str,
-        depth: int,
-        created_at: str,
-        parent_url: str | None,
-        status: str,
     ) -> dict[str, Any]:
-        item: dict[str, Any] = {
-            "crawl_run_id": crawl_run_id,
-            "canonical_url_hash": canonical_url_hash,
-            "site_id": site_id,
-            "site_url_key": f"{site_id}#{canonical_url_hash}",
-            "url": url,
-            "canonical_url": url,
-            "depth": depth,
-            "status": status,
-            "created_at": created_at,
-        }
+        item = dict(
+            crawl_run_id=crawl_run_id,
+            canonical_url_hash=canonical_url_hash,
+            site_id=site_id,
+            site_url_key=f"{site_id}#{canonical_url_hash}",
+            url=url,
+            root_url=root_url,
+            depth=depth,
+            status="QUEUED",
+            created_at=created_at,
+            updated_at=created_at,
+            attempt_count=0,
+            dispatch_pending=True,
+        )
         if parent_url is not None:
             item["parent_url"] = parent_url
         return item
 
-    def get(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-    ) -> dict[str, Any] | None:
-        return self.dynamodb.get_item(
-            key={
-                "crawl_run_id": crawl_run_id,
-                "canonical_url_hash": canonical_url_hash,
-            }
+    @staticmethod
+    def key(page: dict) -> dict:
+        return {k: page[k] for k in ("crawl_run_id", "canonical_url_hash")}
+
+    def initialize_run(self, run: dict, root: dict, runs_table_name: str, site_write: dict) -> None:
+        self.dynamodb.transact_write(
+            [
+                site_write,
+                {
+                    "Put": {
+                        "TableName": runs_table_name,
+                        "Item": run,
+                        "ConditionExpression": "attribute_not_exists(crawl_run_id)",
+                    }
+                },
+                {
+                    "Put": {
+                        "TableName": self.dynamodb.table_name,
+                        "Item": root,
+                        "ConditionExpression": "attribute_not_exists(crawl_run_id)",
+                    }
+                },
+            ]
         )
 
-    def get_latest_crawled(
-        self,
-        *,
-        site_id: str,
-        canonical_url_hash: str,
-    ) -> dict[str, Any] | None:
+    def get(self, *, crawl_run_id: str, canonical_url_hash: str) -> dict[str, Any] | None:
+        return self.dynamodb.get_item(
+            key=dict(crawl_run_id=crawl_run_id, canonical_url_hash=canonical_url_hash),
+            consistent_read=True,
+        )
+
+    def list_for_run(self, crawl_run_id: str) -> list[dict[str, Any]]:
+        return self.dynamodb.query(Key("crawl_run_id").eq(crawl_run_id), ConsistentRead=True)
+
+    def get_latest_crawled(self, *, site_id: str, canonical_url_hash: str) -> dict | None:
         pages = self.dynamodb.query(
             Key("site_url_key").eq(f"{site_id}#{canonical_url_hash}"),
             IndexName=LATEST_PAGE_INDEX,
@@ -123,284 +88,238 @@ class CrawlPagesTable:
         )
         return pages[0] if pages else None
 
-    def list_for_run(self, crawl_run_id: str) -> list[dict[str, Any]]:
-        return self.dynamodb.query(Key("crawl_run_id").eq(crawl_run_id))
-
-    def update_status(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        crawl_status: str,
-        updated_at: str,
-    ) -> None:
-        allowed = {
-            "PENDING": ["DISCOVERED", "PENDING"],
-            "CRAWLING": ["DISCOVERED", "PENDING", "CRAWLING"],
-        }
-        self.dynamodb.update_item(
-            key={
-                "crawl_run_id": crawl_run_id,
-                "canonical_url_hash": canonical_url_hash,
-            },
-            update_expression="SET #status = :status, updated_at = :updated_at",
-            expression_attribute_names={"#status": "status"},
-            expression_attribute_values={
-                ":status": crawl_status,
-                ":updated_at": updated_at,
-            },
-            condition_expression=Attr("status").is_in(allowed[crawl_status]),
+    def counts_for_run(self, crawl_run_id: str) -> dict[str, int]:
+        pages = self.list_for_run(crawl_run_id)
+        complete = sum(p["status"] == "COMPLETED" for p in pages)
+        failed = sum(p["status"] == "FAILED" for p in pages)
+        return dict(
+            discovered_page_count=len(pages),
+            completed_page_count=complete,
+            failed_page_count=failed,
+            pending_page_count=len(pages) - complete - failed,
         )
 
-    def mark_crawling(
+    def claim(
         self,
+        page: dict,
         *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        updated_at: str,
-    ) -> None:
-        self.update_status(
-            crawl_run_id=crawl_run_id,
-            canonical_url_hash=canonical_url_hash,
-            crawl_status="CRAWLING",
-            updated_at=updated_at,
-        )
-
-    def mark_crawled(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        raw_html_s3_key: str,
-        final_url: str,
-        http_status: int,
-        content_type: str,
-        content_length: int,
-        raw_html_hash: str,
-        html_unchanged: bool,
-        crawled_at: str,
-        etag: str | None,
-        last_modified: str | None,
-    ) -> None:
-        values: dict[str, Any] = {
-            ":status": "CRAWLED",
-            ":raw_html_s3_key": raw_html_s3_key,
-            ":final_url": final_url,
-            ":http_status": http_status,
-            ":content_type": content_type,
-            ":content_length": content_length,
-            ":raw_html_hash": raw_html_hash,
-            ":html_unchanged": html_unchanged,
-            ":crawled_at": crawled_at,
-        }
-        update_parts = [
-            "#status = :status",
-            "raw_html_s3_key = :raw_html_s3_key",
-            "final_url = :final_url",
-            "http_status = :http_status",
-            "content_type = :content_type",
-            "content_length = :content_length",
-            "raw_html_hash = :raw_html_hash",
-            "html_unchanged = :html_unchanged",
-            "crawled_at = :crawled_at",
-        ]
-        if etag:
-            values[":etag"] = etag
-            update_parts.append("etag = :etag")
-        if last_modified:
-            values[":last_modified"] = last_modified
-            update_parts.append("last_modified = :last_modified")
-
-        self.dynamodb.update_item(
-            key={
-                "crawl_run_id": crawl_run_id,
-                "canonical_url_hash": canonical_url_hash,
-            },
-            update_expression=f"SET {', '.join(update_parts)}",
-            expression_attribute_names={"#status": "status"},
-            expression_attribute_values=values,
-            condition_expression=Attr("status").eq("CRAWLING"),
-        )
-
-    def mark_parse_pending(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        updated_at: str,
+        runs_table_name: str,
+        token: str,
+        now: str,
+        expires_at: str,
+        max_attempts: int,
     ) -> bool:
+        attempts = int(page.get("attempt_count", 0))
+        if attempts >= max_attempts and not page.get("parsed_content_s3_key"):
+            return False
         try:
-            self.dynamodb.update_item(
-                key={
-                    "crawl_run_id": crawl_run_id,
-                    "canonical_url_hash": canonical_url_hash,
-                },
-                update_expression="SET #status = :status, updated_at = :updated_at",
-                expression_attribute_names={"#status": "status"},
-                expression_attribute_values={
-                    ":status": "PARSE_PENDING",
-                    ":updated_at": updated_at,
-                },
-                condition_expression=Attr("status").is_in(["CRAWLED", "PARSE_PENDING"]),
+            self.dynamodb.transact_write(
+                [
+                    {
+                        "Update": {
+                            "TableName": runs_table_name,
+                            "Key": {
+                                "site_id": page["site_id"],
+                                "crawl_run_id": page["crawl_run_id"],
+                            },
+                            "UpdateExpression": "SET #s = :working, updated_at = :now",
+                            "ConditionExpression": "#s IN (:pending, :working)",
+                            "ExpressionAttributeNames": {"#s": "status"},
+                            "ExpressionAttributeValues": {
+                                ":pending": "PENDING",
+                                ":working": "CRAWLING_AND_PARSING",
+                                ":now": now,
+                            },
+                        }
+                    },
+                    {
+                        "Update": {
+                            "TableName": self.dynamodb.table_name,
+                            "Key": self.key(page),
+                            "UpdateExpression": (
+                                "SET #s = :working, worker_token = :token, "
+                                "lease_expires_at = :expiry, "
+                                "attempt_count = :next, updated_at = :now, dispatch_pending = :no "
+                                "REMOVE retry_after"
+                            ),
+                            "ConditionExpression": (
+                                "site_id = :site AND attempt_count = :previous AND "
+                                "(#s = :queued OR (#s = :working AND lease_expires_at <= :now)) "
+                                "AND (attribute_not_exists(retry_after) OR retry_after <= :now)"
+                            ),
+                            "ExpressionAttributeNames": {"#s": "status"},
+                            "ExpressionAttributeValues": {
+                                ":site": page["site_id"],
+                                ":queued": "QUEUED",
+                                ":working": "CRAWLING_AND_PARSING",
+                                ":token": token,
+                                ":expiry": expires_at,
+                                ":next": attempts + (0 if page.get("parsed_content_s3_key") else 1),
+                                ":previous": attempts,
+                                ":now": now,
+                                ":no": False,
+                            },
+                        }
+                    },
+                ]
             )
         except DynamoDBConditionNotMetError:
             return False
         return True
 
-    def claim_parsing(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        claimed_at: str,
-        lease_expires_at: str,
-    ) -> bool:
+    @staticmethod
+    def ownership(token: str, now: str) -> Any:
+        return (
+            Attr("status").eq("CRAWLING_AND_PARSING")
+            & Attr("worker_token").eq(token)
+            & Attr("lease_expires_at").gt(now)
+        )
+
+    def save_result(self, page: dict, *, token: str, now: str, result: dict) -> None:
+        names = {f"#f{i}": k for i, k in enumerate(result)}
+        values = {f":field{i}": v for i, v in enumerate(result.values())}
+        self.dynamodb.update_item(
+            key=self.key(page),
+            update_expression="SET " + ", ".join(f"#f{i} = :field{i}" for i in range(len(result))),
+            expression_attribute_names=names,
+            expression_attribute_values=values,
+            condition_expression=self.ownership(token, now),
+        )
+
+    def finish(self, page: dict, *, token: str, now: str, error: str | None = None) -> None:
+        self.dynamodb.update_item(
+            key=self.key(page),
+            update_expression=(
+                "SET #s = :status, updated_at = :now, last_error = :error "
+                "REMOVE worker_token, lease_expires_at, retry_after, "
+                "dispatch_pending, dispatch_after"
+            ),
+            expression_attribute_names={"#s": "status"},
+            expression_attribute_values={
+                ":status": "FAILED" if error else "COMPLETED",
+                ":now": now,
+                ":error": (error or "")[:1000],
+            },
+            condition_expression=self.ownership(token, now),
+        )
+
+    def retry(self, page: dict, *, token: str, now: str, retry_after: str, error: str) -> None:
+        self.dynamodb.update_item(
+            key=self.key(page),
+            update_expression=(
+                "SET lease_expires_at = :now, retry_after = :retry, last_error = :error, "
+                "dispatch_pending = :yes, updated_at = :now REMOVE worker_token, dispatch_after"
+            ),
+            expression_attribute_values={
+                ":now": now,
+                ":retry": retry_after,
+                ":error": error[:1000],
+                ":yes": True,
+            },
+            condition_expression=self.ownership(token, now),
+        )
+
+    def fail_abandoned(self, page: dict, *, now: str, error: str) -> bool:
         try:
             self.dynamodb.update_item(
-                key={
-                    "crawl_run_id": crawl_run_id,
-                    "canonical_url_hash": canonical_url_hash,
-                },
+                key=self.key(page),
                 update_expression=(
-                    "SET #status = :parsing, parse_started_at = :claimed_at, "
-                    "parse_lease_expires_at = :lease_expires_at, updated_at = :claimed_at"
+                    "SET #s = :failed, last_error = :error, updated_at = :now "
+                    "REMOVE worker_token, lease_expires_at, retry_after, "
+                    "dispatch_pending, dispatch_after"
                 ),
-                expression_attribute_names={"#status": "status"},
+                expression_attribute_names={"#s": "status"},
                 expression_attribute_values={
-                    ":parsing": "PARSING",
-                    ":claimed_at": claimed_at,
-                    ":lease_expires_at": lease_expires_at,
+                    ":failed": "FAILED",
+                    ":error": error[:1000],
+                    ":now": now,
                 },
                 condition_expression=(
-                    Attr("status").eq("PARSE_PENDING")
-                    | (
-                        Attr("status").eq("PARSING")
-                        & (
-                            Attr("parse_lease_expires_at").not_exists()
-                            | Attr("parse_lease_expires_at").lt(claimed_at)
+                    Attr("site_id").eq(page["site_id"])
+                    & Attr("attempt_count").eq(page["attempt_count"])
+                    & Attr("parsed_content_s3_key").not_exists()
+                    & (
+                        (Attr("status").eq("QUEUED"))
+                        | (
+                            Attr("status").eq("CRAWLING_AND_PARSING")
+                            & Attr("lease_expires_at").lte(now)
                         )
                     )
+                    & (Attr("retry_after").not_exists() | Attr("retry_after").lte(now))
                 ),
             )
         except DynamoDBConditionNotMetError:
             return False
         return True
 
-    def mark_queued(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        updated_at: str,
-    ) -> None:
-        try:
-            self.update_status(
-                crawl_run_id=crawl_run_id,
-                canonical_url_hash=canonical_url_hash,
-                crawl_status="PENDING",
-                updated_at=updated_at,
-            )
-        except DynamoDBConditionNotMetError:
-            return
-
-    def mark_parsed(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        parsed_content_s3_key: str,
-        parsed_at: str,
-        claimed_at: str,
-    ) -> None:
-        self.dynamodb.update_item(
-            key={
-                "crawl_run_id": crawl_run_id,
-                "canonical_url_hash": canonical_url_hash,
-            },
-            update_expression=(
-                "SET #status = :status, parsed_content_s3_key = :parsed_key, "
-                "parsed_at = :parsed_at, updated_at = :updated_at"
-            ),
-            expression_attribute_names={"#status": "status"},
-            expression_attribute_values={
-                ":status": "PARSED",
-                ":parsed_key": parsed_content_s3_key,
-                ":parsed_at": parsed_at,
-                ":updated_at": parsed_at,
-            },
-            condition_expression=(
-                Attr("status").eq("PARSING") & Attr("parse_started_at").eq(claimed_at)
-            ),
-        )
-
-    def record_parse_failure(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        error_message: str,
-        attempt: int,
-        terminal: bool,
-        updated_at: str,
-        claimed_at: str,
-    ) -> None:
-        self.dynamodb.update_item(
-            key={
-                "crawl_run_id": crawl_run_id,
-                "canonical_url_hash": canonical_url_hash,
-            },
-            update_expression=(
-                "SET #status = :status, last_error = :last_error, "
-                "parse_attempt = :attempt, updated_at = :updated_at, "
-                "parse_lease_expires_at = :updated_at"
-            ),
-            expression_attribute_names={"#status": "status"},
-            expression_attribute_values={
-                ":status": "FAILED" if terminal else "PARSING",
-                ":last_error": error_message[:1000],
-                ":attempt": attempt,
-                ":updated_at": updated_at,
-            },
-            condition_expression=(
-                Attr("status").eq("PARSING") & Attr("parse_started_at").eq(claimed_at)
-            ),
-        )
-
-    def record_failure(
-        self,
-        *,
-        crawl_run_id: str,
-        canonical_url_hash: str,
-        error_message: str,
-        attempt: int,
-        terminal: bool,
-        updated_at: str,
-    ) -> bool:
-        values = {
-            ":last_error": error_message[:1000],
-            ":attempt": attempt,
-            ":updated_at": updated_at,
-        }
-        if terminal:
-            values[":status"] = "FAILED"
-        try:
+    def mark_sent(self, page: dict, *, dispatch_after: str) -> None:
+        with contextlib.suppress(DynamoDBConditionNotMetError):
             self.dynamodb.update_item(
-                key={
-                    "crawl_run_id": crawl_run_id,
-                    "canonical_url_hash": canonical_url_hash,
-                },
-                update_expression=(
-                    "SET "
-                    + ("#status = :status, " if terminal else "")
-                    + "last_error = :last_error, "
-                    "crawl_attempt = :attempt, updated_at = :updated_at"
-                ),
-                expression_attribute_names={"#status": "status"} if terminal else None,
-                expression_attribute_values=values,
-                condition_expression=Attr("status").is_in(
-                    ["DISCOVERED", "PENDING", "CRAWLING", "CRAWLED", "PARSE_PENDING"]
+                key=self.key(page),
+                update_expression="SET dispatch_pending = :no, dispatch_after = :after",
+                expression_attribute_values={":no": False, ":after": dispatch_after},
+                condition_expression=(
+                    Attr("attempt_count").eq(page["attempt_count"])
+                    & Attr("status").is_in(["QUEUED", "CRAWLING_AND_PARSING"])
                 ),
             )
-        except DynamoDBConditionNotMetError:
-            return False
-        return terminal
+
+    def register_children(
+        self,
+        parent: dict,
+        children: list[dict],
+        *,
+        runs_table_name: str,
+        lock_token: str,
+        worker_token: str,
+        now: str,
+    ) -> None:
+        # One transaction fences both owners and inserts at most 98 children.
+        self.dynamodb.transact_write(
+            [
+                {
+                    "ConditionCheck": {
+                        "TableName": runs_table_name,
+                        "Key": {
+                            "site_id": parent["site_id"],
+                            "crawl_run_id": parent["crawl_run_id"],
+                        },
+                        "ConditionExpression": (
+                            "discovery_lock_token = :token AND discovery_lock_expires_at > :now "
+                            "AND #s = :working"
+                        ),
+                        "ExpressionAttributeNames": {"#s": "status"},
+                        "ExpressionAttributeValues": {
+                            ":token": lock_token,
+                            ":now": now,
+                            ":working": "CRAWLING_AND_PARSING",
+                        },
+                    }
+                },
+                {
+                    "ConditionCheck": {
+                        "TableName": self.dynamodb.table_name,
+                        "Key": self.key(parent),
+                        "ConditionExpression": (
+                            "#s = :working AND worker_token = :token AND lease_expires_at > :now"
+                        ),
+                        "ExpressionAttributeNames": {"#s": "status"},
+                        "ExpressionAttributeValues": {
+                            ":working": "CRAWLING_AND_PARSING",
+                            ":token": worker_token,
+                            ":now": now,
+                        },
+                    }
+                },
+                *[
+                    {
+                        "Put": {
+                            "TableName": self.dynamodb.table_name,
+                            "Item": child,
+                            "ConditionExpression": "attribute_not_exists(crawl_run_id)",
+                        }
+                    }
+                    for child in children
+                ],
+            ]
+        )

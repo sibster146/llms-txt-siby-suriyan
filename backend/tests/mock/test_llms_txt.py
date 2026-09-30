@@ -1,5 +1,7 @@
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -27,6 +29,8 @@ class FakeTable:
         items_by_site_id: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.fail = fail
+        self.dynamodb = SimpleNamespace(table_name="runs")
+        self.counts = {}
         self.item = item
         self.items = items or []
         self.items_by_site_id = items_by_site_id or {}
@@ -40,11 +44,29 @@ class FakeTable:
     def upsert_for_crawl(self, **kwargs: Any) -> None:
         self._record("upsert_for_crawl", kwargs)
 
+    def crawl_setup_write(self, **kwargs):
+        self._record("crawl_setup_write", kwargs)
+        return kwargs
+
     def add(self, **kwargs: Any) -> None:
         self._record("add", kwargs)
 
     def create(self, **kwargs: Any) -> None:
         self._record("create", kwargs)
+
+    def initialize_run(self, run, root, table_name, site_write):
+        self._record("initialize_run", {"run": run, "root": root})
+
+    def counts_for_run(self, run_id):
+        return self.counts.get(
+            run_id,
+            dict(
+                pending_page_count=0,
+                discovered_page_count=0,
+                completed_page_count=0,
+                failed_page_count=0,
+            ),
+        )
 
     def update_status(self, **kwargs: Any) -> None:
         self._record("update_status", kwargs)
@@ -101,6 +123,17 @@ def _test_app(
     s3: FakeS3 | None = None,
 ) -> FastAPI:
     app = FastAPI()
+    for run in [crawl_runs.item, *crawl_runs.items_by_site_id.values()]:
+        if run and "crawl_run_id" in run:
+            crawl_pages.counts[run["crawl_run_id"]] = {
+                k: run.get(k, 0)
+                for k in [
+                    "pending_page_count",
+                    "discovered_page_count",
+                    "completed_page_count",
+                    "failed_page_count",
+                ]
+            }
     app.include_router(router)
     app.dependency_overrides[get_sites_table] = lambda: sites
     app.dependency_overrides[get_user_sites_table] = lambda: user_sites
@@ -149,10 +182,10 @@ def test_create_llms_txt_persists_site_mapping_and_crawl() -> None:
         "crawl_run_id": body["crawl_run_id"],
         "timestamp": user_sites.calls[0]["timestamp"],
     }
-    assert crawl_runs.calls[0]["site_id"] == body["site_id"]
-    assert crawl_runs.calls[0]["crawl_run_id"] == body["crawl_run_id"]
-    assert crawl_pages.calls[0]["url"] == "https://example.com/docs"
-    assert crawl_pages.calls[0]["depth"] == 0
+    assert crawl_pages.calls[0]["run"]["site_id"] == body["site_id"]
+    assert crawl_pages.calls[0]["run"]["crawl_run_id"] == body["crawl_run_id"]
+    assert crawl_pages.calls[0]["root"]["url"] == "https://example.com/docs"
+    assert crawl_pages.calls[0]["root"]["depth"] == 0
     assert crawl_queue.messages == [
         {
             "action": "crawl_url",
@@ -234,7 +267,7 @@ def test_create_llms_txt_requires_authentication() -> None:
     assert dynamodb.calls == []
 
 
-def test_create_llms_txt_marks_run_failed_when_queueing_fails() -> None:
+def test_create_llms_txt_preserves_run_for_recovery_when_queueing_fails() -> None:
     sites = FakeTable()
     user_sites = FakeTable()
     crawl_runs = FakeTable()
@@ -252,8 +285,8 @@ def test_create_llms_txt_marks_run_failed_when_queueing_fails() -> None:
 
     assert response.status_code == 502
     assert response.json() == {"detail": "The crawl request was saved but could not be queued."}
-    assert crawl_runs.calls[-1]["operation"] == "update_status"
-    assert crawl_runs.calls[-1]["crawl_status"] == "FAILED"
+    assert not any(call["operation"] == "update_status" for call in crawl_runs.calls)
+    assert crawl_pages.calls[0]["root"]["dispatch_pending"] is True
 
 
 def test_get_crawl_status_returns_owned_crawl() -> None:
@@ -271,14 +304,24 @@ def test_get_crawl_status_returns_owned_crawl() -> None:
             "updated_at": "2026-09-27T01:01:00+00:00",
         }
     )
-    app = _test_app(FakeTable(), user_sites, crawl_runs, FakeTable())
+    pages = FakeTable()
+    app = _test_app(FakeTable(), user_sites, crawl_runs, pages)
+    # Legacy run counters must not override counts derived from page records.
+    pages.counts["crawl-1"] = dict(
+        discovered_page_count=5,
+        completed_page_count=3,
+        failed_page_count=1,
+        pending_page_count=1,
+    )
 
     with TestClient(app) as client:
         response = client.get("/llms-txt/site-1/crawls/crawl-1")
 
     assert response.status_code == 200
     assert response.json()["status"] == "CRAWLING_AND_PARSING"
-    assert response.json()["discovered_page_count"] == 4
+    assert response.json()["discovered_page_count"] == 5
+    assert response.json()["completed_page_count"] == 3
+    assert response.json()["pending_page_count"] == 1
     assert user_sites.calls[0]["user_id"] == "user-123"
 
 
@@ -302,7 +345,7 @@ def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
             {
                 "user_id": "user-123",
                 "site_id": "site-1",
-                "last_crawl_run_id": "crawl-current-1",
+                "last_crawl_run_id": "crawl-old-user-request",
             },
             {"user_id": "user-123", "site_id": "site-2"},
         ]
@@ -313,6 +356,7 @@ def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
                 "site_id": "site-1",
                 "root_url": "https://one.example/",
                 "last_crawl_run_id": "crawl-1",
+                "latest_crawl_run_id": "crawl-current-1",
                 "created_at": "2026-09-26T12:00:00+00:00",
                 "updated_at": "2026-09-26T12:00:00+00:00",
                 "modified_at": "2026-09-27T13:00:00+00:00",
@@ -362,17 +406,20 @@ def test_list_user_sites_loads_mapped_sites_most_recent_first() -> None:
     assert response.json()[0]["latest_crawl"]["crawl_run_id"] == "crawl-current-1"
     assert response.json()[0]["latest_crawl"]["status"] == "CRAWLING_AND_PARSING"
     assert response.json()[1]["latest_crawl"]["status"] == "COMPLETED"
+    assert crawl_runs.calls[0]["crawl_run_id"] == "crawl-current-1"
     assert user_sites.calls[0] == {
         "operation": "list_for_user",
         "user_id": "user-123",
     }
 
 
-def test_get_site_detail_returns_current_content_and_version_history() -> None:
+@pytest.mark.parametrize("crawl_status", ["COMPLETED", "CRAWLING_AND_PARSING", "GENERATING"])
+def test_get_site_detail_returns_current_content_and_version_history(crawl_status: str) -> None:
     site = {
         "site_id": "site-1",
         "root_url": "https://example.com/",
-        "last_crawl_run_id": "crawl-2",
+        "last_crawl_run_id": "crawl-1",
+        "latest_crawl_run_id": "crawl-2",
         "current_llms_txt_version_id": "version-2",
         "created_at": "2026-09-26T12:00:00+00:00",
         "updated_at": "2026-09-28T12:00:00+00:00",
@@ -406,17 +453,18 @@ def test_get_site_detail_returns_current_content_and_version_history() -> None:
     latest_crawl = {
         "site_id": "site-1",
         "crawl_run_id": "crawl-2",
-        "status": "COMPLETED",
+        "status": crawl_status,
         "pending_page_count": 0,
         "discovered_page_count": 12,
         "completed_page_count": 10,
         "failed_page_count": 2,
         "created_at": "2026-09-28T11:00:00+00:00",
     }
+    crawl_runs = FakeTable(item=latest_crawl)
     app = _test_app(
         FakeTable(item=site),
-        FakeTable(item={"user_id": "user-123", "site_id": "site-1"}),
-        FakeTable(item=latest_crawl),
+        FakeTable(item={"user_id": "user-123", "site_id": "site-1", "last_crawl_run_id": "old"}),
+        crawl_runs,
         FakeTable(),
         versions=versions,
         s3=s3,
@@ -427,6 +475,8 @@ def test_get_site_detail_returns_current_content_and_version_history() -> None:
 
     assert response.status_code == 200
     assert response.json()["latest_crawl"]["crawl_run_id"] == "crawl-2"
+    assert response.json()["latest_crawl"]["status"] == crawl_status
+    assert crawl_runs.calls[0]["crawl_run_id"] == "crawl-2"
     assert response.json()["latest_crawl"]["discovered_page_count"] == 12
     assert response.json()["current_version"]["version_id"] == "version-2"
     assert response.json()["current_version"]["content"] == "# Example\n"

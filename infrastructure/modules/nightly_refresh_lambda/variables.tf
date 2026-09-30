@@ -62,7 +62,7 @@ variable "crawl_queue_arn" {
 variable "schedule_expression" {
   description = "EventBridge Scheduler cron expression."
   type        = string
-  default     = "cron(10 22 * * ? *)"
+  default     = "cron(0 2 * * ? *)"
 }
 
 variable "schedule_timezone" {

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,11 @@ from app.clients.bedrock import BedrockClient
 from app.clients.dynamodb import DynamoDBClient
 from app.clients.s3 import S3Client
 from app.clients.sqs import SQSClient
-from app.services.llms_txt_generator import GenerationMessageError, LlmsTxtGeneratorService
+from app.services.llms_txt_generator import (
+    GenerationMessageError,
+    GenerationRequest,
+    LlmsTxtGeneratorService,
+)
 from app.tables.crawl_pages import CrawlPagesTable
 from app.tables.crawl_runs import CrawlRunsTable
 from app.tables.llms_txt_versions import LlmsTxtVersionsTable
@@ -83,6 +88,30 @@ def _process_record(record: dict[str, Any]) -> None:
 
 
 @lru_cache
+def _crawl_runs_table() -> CrawlRunsTable:
+    region = _required_env("AWS_REGION")
+    dynamodb = boto3.Session(region_name=region).resource("dynamodb", region_name=region)
+    return CrawlRunsTable(DynamoDBClient(dynamodb.Table(_required_env("CRAWL_RUNS_TABLE"))))
+
+
+def _process_dead_letter(record: dict[str, Any]) -> None:
+    message = _decode_record(record)
+    reason = (
+        message.get("failure_reason")
+        or "Generation exhausted queue deliveries (failure or timeout)"
+    )
+    if "original_body" in message:
+        message = _decode_record({"body": message["original_body"]})
+    request = GenerationRequest.from_message(message)
+    _crawl_runs_table().mark_generation_failed(
+        site_id=request.site_id,
+        crawl_run_id=request.crawl_run_id,
+        error_message=str(reason),
+        updated_at=datetime.now(UTC).isoformat(),
+    )
+
+
+@lru_cache
 def _retry_queues() -> tuple[SQSClient, SQSClient]:
     region = _required_env("AWS_REGION")
     client = boto3.Session(region_name=region).client("sqs", region_name=region)
@@ -133,8 +162,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     batch_item_failures = []
     for record in event.get("Records", []):
+        is_dead_letter = record.get("eventSourceARN") == _required_env("LLM_TXT_DLQ_ARN")
         try:
-            _process_record(record)
+            if is_dead_letter:
+                _process_dead_letter(record)
+            else:
+                _process_record(record)
         except Exception as error:
             print(
                 json.dumps(
@@ -146,6 +179,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     }
                 )
             )
+            if is_dead_letter:
+                # Keep the message if DynamoDB is unavailable or its run cannot be identified.
+                batch_item_failures.append({"itemIdentifier": record.get("messageId", "")})
+                continue
             try:
                 _schedule_failure(record, error)
             except Exception as scheduling_error:

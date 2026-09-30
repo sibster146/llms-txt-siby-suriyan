@@ -64,18 +64,8 @@ output "web_crawler_lambda_arn" {
 }
 
 output "html_parser_ecr_repository_url" {
-  description = "ECR repository used by the HTML parser Lambda."
+  description = "Retained legacy parser repository; no active parser Lambda uses it."
   value       = module.html_parser_ecr.repository_url
-}
-
-output "html_parser_lambda_name" {
-  description = "Development HTML parser Lambda function name."
-  value       = module.html_parser_lambda.function_name
-}
-
-output "html_parser_lambda_arn" {
-  description = "Development HTML parser Lambda function ARN."
-  value       = module.html_parser_lambda.function_arn
 }
 
 output "llms_txt_generator_ecr_repository_url" {

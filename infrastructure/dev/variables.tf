@@ -15,10 +15,6 @@ variable "web_crawler_image_uri" {
   type        = string
 }
 
-variable "html_parser_image_uri" {
-  description = "Commit-tagged ECR image URI for the HTML parser Lambda."
-  type        = string
-}
 
 variable "llms_txt_generator_image_uri" {
   description = "Commit-tagged ECR image URI for the llms.txt generator Lambda."
@@ -33,7 +29,7 @@ variable "nightly_refresh_image_uri" {
 variable "nightly_refresh_schedule_expression" {
   description = "EventBridge Scheduler expression for nightly website refreshes."
   type        = string
-  default     = "cron(10 22 * * ? *)"
+  default     = "cron(0 2 * * ? *)"
 }
 
 variable "nightly_refresh_schedule_timezone" {
@@ -42,46 +38,52 @@ variable "nightly_refresh_schedule_timezone" {
   default     = "America/New_York"
 }
 
-variable "parser_max_attempts" {
-  description = "Maximum parser deliveries before a message reaches the DLQ."
+variable "crawler_max_attempts" {
+  description = "Maximum actual crawl-and-parse attempts per page."
   type        = number
   default     = 2
 }
 
-variable "parser_retry_delay_seconds" {
-  description = "Delay before a failed parser message is delivered again."
+variable "crawler_retry_delay_seconds" {
+  description = "Delay before a failed combined-worker message is delivered again."
   type        = number
   default     = 30
 }
 
-variable "parser_max_depth" {
+variable "crawler_max_depth" {
   description = "Maximum child-link depth for a crawl run."
   type        = number
   default     = 2
 }
 
-variable "parser_max_discovered_pages" {
+variable "crawler_max_discovered_pages" {
   description = "Maximum pages discovered in a crawl run, including the root page."
   type        = number
-  default     = 1000
+  default     = 500
 }
 
-variable "parser_max_links_per_page" {
+variable "crawler_max_links_per_page" {
   description = "Maximum child links accepted from one parsed page."
   type        = number
   default     = 100
 }
 
-variable "parser_maximum_concurrency" {
-  description = "Maximum concurrent parser invocations started by SQS."
+variable "crawler_maximum_concurrency" {
+  description = "Maximum concurrent crawl-and-parse invocations started by SQS."
   type        = number
-  default     = 25
+  default     = 3
 }
 
-variable "parser_memory_size" {
-  description = "Parser Lambda memory allocation in MB."
+variable "crawler_memory_size" {
+  description = "Combined worker memory allocation in MB."
   type        = number
   default     = 2048
+}
+
+variable "crawler_timeout_seconds" {
+  description = "Combined crawl-and-parse worker timeout."
+  type        = number
+  default     = 120
 }
 
 variable "generator_model_id" {
