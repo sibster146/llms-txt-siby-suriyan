@@ -23,7 +23,7 @@ from app.tables.sites import SitesTable
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 SPACE_PATTERN = re.compile(r"\s+")
-MAX_OUTPUT_SECTIONS = 5
+MAX_OUTPUT_SECTIONS = 4
 MAX_OUTPUT_LINKS_PER_SECTION = 4
 
 
@@ -97,7 +97,7 @@ class LlmsTxtGeneratorService:
         s3: S3Client,
         bedrock: BedrockClient,
         max_input_pages: int = 500,
-        max_output_links: int = 20,
+        max_output_links: int = 16,
         max_excerpt_chars: int = 1000,
         max_model_tokens: int = 4000,
     ) -> None:
@@ -368,9 +368,10 @@ def _direct_generation_prompt(
 ) -> str:
     """Build format guidance, a structural example, and JSON source data for Bedrock.
 
-    Instruct at most five sections and four links per section, with the total
-    capped by max_links. Include candidate metadata and excerpts as untrusted
-    content. These constraints guide the model but are not validated afterward.
+    Require one to four project facts before at most four file-list sections,
+    each with up to four links and a total capped by max_links. Include candidate
+    metadata and excerpts as untrusted content. These constraints guide the model
+    but are not validated afterward.
     """
     max_links = min(max_links, MAX_OUTPUT_SECTIONS * MAX_OUTPUT_LINKS_PER_SECTION)
     page_payload = [
@@ -391,7 +392,13 @@ def _direct_generation_prompt(
         "project name. Do not use a bare URL as the H1.\n"
         "- Follow the H1 with one non-empty blockquote containing one or two factual summary "
         "sentences.\n"
-        "- You may add at most one short plain-text detail paragraph after the blockquote.\n"
+        "- After the summary blockquote and before the first H2 file-list heading, you MUST "
+        "include a context block with one to four distinct facts about the project or website "
+        "itself. This block is required; do not omit it.\n"
+        "- Write those facts as short paragraphs or bullet points without any heading. "
+        "Explain supported details such as its audience, scope, offerings, or important "
+        "context for interpreting the linked files. Do not repeat the summary, invent facts, "
+        "or pad the block to reach four items. One supported fact is enough.\n"
         f"- Use at most {MAX_OUTPUT_SECTIONS} H2 sections, including Optional if present, and "
         f"at most {MAX_OUTPUT_LINKS_PER_SECTION} links per section. Use fewer when sufficient.\n"
         "- Group links beneath clear H2 headings. Each H2 section must contain Markdown list "
@@ -415,7 +422,9 @@ def _direct_generation_prompt(
         "Structural example:\n"
         "# OpenAI API\n\n"
         "> Index for OpenAI API documentation and implementation resources.\n\n"
-        "Use the guides for concepts and workflows, and the reference for endpoint details.\n\n"
+        "- The OpenAI API provides programmatic access to AI models.\n"
+        "- The guides cover concepts and workflows; the reference describes endpoints "
+        "and schemas.\n\n"
         "## Documentation sets\n\n"
         "- [OpenAI API guides](<https://developers.openai.com/api/docs/llms.txt>): Guides and "
         "conceptual documentation.\n"
