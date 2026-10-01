@@ -19,7 +19,7 @@ Web application for generating and maintaining `llms.txt` files from website con
 
 ## Host on Your Own Domain
 
-Deploy your own copy into your AWS account using the steps below. You do **not** need to purchase or configure a domain: AWS assigns your deployment an HTTPS CloudFront URL. These instructions deploy the frontend, backend, workers, and data services, not just the frontend.
+Deploy your own copy into your AWS account using the steps below. You do **not** need to purchase or configure a domain: AWS assigns your deployment an HTTPS CloudFront URL. These instructions deploy the frontend, backend, workers, and data services.
 
 ### 1. Prepare Your AWS Account
 
@@ -115,7 +115,7 @@ Review [production Terraform variables](infrastructure/prod/variables.tf) for cr
 
 Keep `project_name = "llms_txt"` for the initial deployment: workflow image names and deployment IAM policies rely on that naming convention. Keep the Terraform `aws_region` and GitHub `AWS_REGION` values aligned. Update the crawler user-agent repository link in `infrastructure/prod/main.tf` to identify your fork. Currently it is llms-txt-crawler/1.0 (+https://github.com/tryBaskt/llms-txt-siby-suriyan). Change the repo url to your own.
 
-Commit configuration changes to your fork, either in the variable defaults or a non-secret `infrastructure/prod/terraform.tfvars`. Do not copy the example's placeholder `*_image_uri` values into an active tfvars file: GitHub Actions supplies the real image URIs, and tfvars values would override those environment inputs. Never commit credentials, `.env` files, or Terraform state.
+Commit configuration changes to your fork in the variable defaults.
 
 After changing Terraform files, run `terraform fmt -recursive infrastructure` and include the formatting changes in your commit. The workflow checks formatting before deployment.
 
@@ -134,17 +134,15 @@ In **Actions**, open **Deploy Prod** and monitor these jobs in order:
 3. **Deploy Frontend**: builds React using Terraform outputs, uploads it to the private frontend S3 bucket, and invalidates CloudFront's cache.
 4. **Run Integration Tests**: signs in as a guest, crawls the reserved test website `https://www.roblox.com/`, waits for generation, and cleans up that test's records and files.
 
-The workflow creates its own account-specific Terraform state bucket. Do not point it at the original deployment's state or copy another account's state files. No production backend/frontend `.env` files or manually copied Cognito IDs are needed; configuration comes from Terraform outputs and Secrets Manager.
-
-The integration test uses a live third-party website (https://www.roblox.com/) and real AWS/model calls. Reserve Roblox for the test rather than adding it through the UI. See [integration-test behavior and cleanup](backend/tests/integrated/README.md) before rerunning after an interrupted test.
+The workflow creates its own account-specific Terraform state bucket.
 
 ### 8. Open and Verify Your Application
 
 Find **Application** in the **Deploy Frontend** job summary. It will be your own `https://<distribution>.cloudfront.net` URL, also available as Terraform's `application_url` output.
 
-Open that URL, try guest sign-in or create an account, and generate a file for a website other than the reserved integration-test site. Confirm that the status reaches completion, the file opens, and manual refresh works. In EventBridge Scheduler, confirm the production nightly-refresh and recovery schedules are enabled. CloudWatch logs contain worker errors if a crawl fails.
+Open that URL, try guest sign-in or create an account, and generate a file for a website. Confirm that the status reaches completion, the file opens, and manual refresh works. In EventBridge Scheduler, confirm the production nightly-refresh and recovery schedules are enabled. CloudWatch logs contain worker errors if a crawl fails.
 
-For subsequent releases, push changes to `prod` again. You can also rerun **Deploy Prod** manually when the workflow is available on your fork's default branch, selecting `prod` as the deployment branch. Never share the original application's CloudFront URL as the URL for your deployment.
+For subsequent releases, push changes to `prod` again. You can also rerun **Deploy Prod** manually when the workflow is available on your fork's default branch, selecting `prod` as the deployment branch. 
 
 ### 9. Optional Development Environment
 
@@ -262,7 +260,8 @@ The Python application lives in [`backend/app/`](backend/app). Its modules are s
 - `llms_txt_generator.py`: loads parsed page data, compares crawl manifests to reuse unchanged output, asks Bedrock for a new llms.txt when needed, and saves the file/version before completing the run.
 - `nightly_refresh.py`: reads all registered sites and uses shared setup to enqueue scheduled crawls with repeatable IDs for each site/scheduled time.
 
-[`backend/tests/integrated/`](backend/tests/integrated) contains the live end-to-end deployment test. Local mock tests are ignored by Git and are not included in a fresh clone.
+**Tests**
+[`backend/tests/integrated/`](backend/tests/integrated) contains the live end-to-end deployment test.
 
 ### Frontend
 
@@ -296,9 +295,7 @@ Each Lambda image packages its handler with the shared `backend/app` code and re
 
 ### Infrastructure and Delivery
 
-[`infrastructure/modules/`](infrastructure/modules) contains reusable Terraform modules for AWS services. [`infrastructure/dev/`](infrastructure/dev) and [`infrastructure/prod/`](infrastructure/prod) compose those modules with environment-specific names and settings. Production additionally provisions networking, the load balancer, ECS, and the frontend CDN.
-
-[`infrastructure/scripts/`](infrastructure/scripts) contains remote-state setup and integration-test runner scripts. [`.github/workflows/`](.github/workflows) defines the deployment jobs that build images, apply Terraform, deploy the production application, and run the live integration test.
+[`infrastructure/modules/`](infrastructure/modules) contains reusable Terraform modules for AWS services. [`infrastructure/dev/`](infrastructure/dev) and [`infrastructure/prod/`](infrastructure/prod) compose those modules with environment-specific names and settings. Production additionally provisions networking, the load balancer, ECS, and the frontend CDN. [`.github/workflows/`](.github/workflows) defines the deployment jobs that build images, apply Terraform, deploy the production application, and run the live integration test.
 
 ## Architecture and Workflow
 
@@ -337,19 +334,14 @@ In dev, React and FastAPI run locally while workers and storage stay in AWS. In 
 4. The backend links the user to the site, sends the root page to `crawl_sqs`, and returns immediately with the crawl ID.
 5. The frontend reloads the backend's site list and polls progress every four seconds.
 
-The site, run, and root page are saved together. Linking the user and sending the message happen afterward. If the queue send fails, recovery can find the saved page and send it later.
-
 ### Crawl-and-Parse Workflow
 
 Each queue message represents one page. Multiple workers can process different pages at the same time.
 
-1. **Claim the page:** check its stored status and claim ownership. Skip pages that are already completed or failed.
-2. **Fetch or resume:** reuse raw HTML/Markdown already saved for this run. Otherwise check the URL and robots rules, then fetch the page within the size limit.
-3. **Save raw content:** hash the response and store it in S3 if that content is not already there. Save its S3 reference and crawl metadata in DynamoDB.
-4. **Parse and discover links:** extract the title, description, headings, main content, and child URLs. HTML uses lxml and Trafilatura; Markdown is parsed directly. The root page also checks sitemaps. Existing parsed content is reused, but child links are still extracted from the saved raw page.
-5. **Save parsed content:** write or reuse parsed JSON in S3, then save its reference in DynamoDB before adding children.
-6. **Add children:** acquire the discovery lock, skip existing URLs, and save new page records within the crawl limit. Release the lock and send the children to `crawl_sqs`.
-7. **Finish:** mark the page COMPLETED after its children are registered and dispatched. Check whether all pages have finished and generation can begin. Failed pages also trigger this check.
+1. **Claim the page:** worker reads a message from the queue, checks the status (skip pages that are COMPLETE or FAILED) of the page (from the message), and claims ownership. No other worker can claim that page now.
+2. **Fetch and parse page:** worker checks if the page has raw HTML/Markdown or the parsed json already in S3 for the current crawl. If no raw HTML/Markdown, it fetches the webpages, hashes the content, stores the raw HTML/Markdown if it doesn't already exist (checks if current content hash matches existing content hash), then parses, stores the parsed json if it doesn't already exist (checks if current content hash matches existing content hash). If a worker sees that the raw HTML/Markdown does exist for this page for the current run, it will start at the parsing step. If it sees that parsed json already exists for this current page for the current run, it will move to discover links. These checkpoints and constraints help reduce redundant work.
+4. **Discover links:** Extract the child links for the page, acquire the discovery lock, skip existing URLs, and save new page records within the crawl limit. Release the lock and send the children to `crawl_sqs`.
+7. **Finish:** mark the page COMPLETED after its children are registered and dispatched. Check whether all pages have finished and generation can begin. 
 
 Current defaults allow depth 2, up to 100 discovered links per page, and at most 500 registered pages per run including the root. These limits are configurable through Terraform.
 
@@ -357,29 +349,13 @@ Current defaults allow depth 2, up to 100 discovered links per page, and at most
 
 **Page ownership:** each claimed page receives a random `worker_token` and `lease_expires_at`. Updates require a matching token and valid lease, so an old worker cannot overwrite a new owner's page state.
 
-**Discovery lock:** `discovery_lock_token` and `discovery_lock_expires_at` live on CrawlRuns, so no separate lock table is needed. This prevents workers from adding new URLs while another worker decides whether the crawl is finished.
+**Discovery lock:** `discovery_lock_token` and `discovery_lock_expires_at` live on CrawlRuns. This prevents workers from adding new URLs while another worker decides whether the crawl is finished or adding urls themselves.
 
-**Child deduplication:** pages are keyed by `(crawl_run_id, canonical_url_hash)`. Workers skip existing URLs, and DynamoDB rejects duplicate inserts. Each URL has one record per run; a new run creates its own records.
+**Child deduplication:** pages are keyed by `(crawl_run_id, canonical_url_hash)`. Workers check if the child url currently exists in CrawlPages before enqueing.
 
 **Generation readiness:** check all pages while holding the discovery lock. If any are queued or working, wait. If all failed, mark the run FAILED. Otherwise atomically move it to GENERATING and send a message to `llm_txt_sqs`.
 
-**Progress consistency:** counts are calculated from CrawlPages instead of incremented or decremented on CrawlRuns. Page queries and site/run lookups use strongly consistent reads. The frontend's **Completed** count includes successful and failed pages: it means finished, not necessarily successful.
-
 **Duplicate messages:** SQS can deliver a message more than once. Ownership and status checks protect page records, while URL checks prevent duplicate child records. Queue sends and database writes are separate, so repeated messages or external calls are still possible.
-
-### Checkpoints and Content Reuse
-
-| Checkpoint | What is saved | How a retry resumes |
-| --- | --- | --- |
-| Raw response | S3 content and its key/hash on CrawlPages. | Read the saved response instead of fetching again. |
-| Parsed content | Parsed JSON in S3 and its key on CrawlPages. | Reuse parsed content and rediscover child links from the raw page. |
-| Child dispatch | Child records with pending-send fields. | Send children that were saved but not successfully dispatched. |
-| Generation dispatch | GENERATING status and a pending-send flag. | Retry sending the generation message. |
-| Generated version | The file in S3 and its version record. | Reuse the file and finish updating the site/run. |
-
-Files are saved in S3 before their references are written to DynamoDB. Queue messages are sent before their pending-send flags are cleared. If a worker stops between those operations, recovery can retry; it may repeat a send rather than lose the work.
-
-S3 keys include content hashes, allowing unchanged raw and parsed files to be reused across crawls. Parsed keys also include the parser version and final URL's hash. Every run still gets its own page records, and child links are extracted again rather than reused from an old list.
 
 ### Generating and Versioning llms.txt
 
@@ -401,15 +377,9 @@ Pages move from `QUEUED -> CRAWLING_AND_PARSING -> COMPLETED | FAILED`. Runs mov
 - **Recovery:** every two minutes, EventBridge invokes the crawl-and-parse Lambda to resend abandoned work, fail exhausted pages, and check whether generation can start. Checks continue while runs are active; checking alone does not consume a processing attempt.
 - **DLQs:** the crawl worker handles its DLQ using the same attempt and ownership rules. The generator's DLQ handler marks an exhausted GENERATING run FAILED without calling the model again.
 
-### Viewing Files and Refreshing Sites
+### Refreshing ###
 
-The homepage loads the user's sites and latest crawl progress from the backend. Sites with newer content changes appear first, using `modified_at`.
-
-The file page shows the current file and previous versions, with copy, download, and manual refresh actions. Both pages load status when opened and poll every four seconds while a crawl is active.
-
-If the latest crawl fails, an existing file stays visible. Without an existing file, the page shows **Crawl failed**. **Generated at** is when that version was created; **Updated at** is when the latest refresh started, even if it failed or reused the file.
-
-At **2:00 AM in America/New_York**, EventBridge invokes NightlyRefresh to queue every site using the same setup as manual refresh. Each site and scheduled time produces a stable run ID, so schedule retries reuse that run. This runs independently of the browser and backend API and does not change UserSites timestamps.
+At **2:00 AM in America/New_York**, EventBridge invokes NightlyRefresh to queue every site using the same setup as manual refresh.
 
 ### Data Models
 
@@ -421,4 +391,28 @@ At **2:00 AM in America/New_York**, EventBridge invokes NightlyRefresh to queue 
 | CrawlPages | `crawl_run_id` | `canonical_url_hash` | Per-page status, ownership, attempts, checkpoints, and dispatch state. |
 | LlmsTxtVersions | `site_id` | `version_id` | Generated-file metadata, source/output hashes, model, and S3 location. |
 
+**Global secondary indexes (GSIs)**
+
+CrawlPages has a GSI
+
+| Model | GSI name | Partition key | Sort key | Projection | Purpose |
+| --- | --- | --- | --- | --- | --- |
+| CrawlPages | `site_url_crawled_at_index` | `site_url_key` (`{site_id}#{canonical_url_hash}`) | `crawled_at` | `ALL` attributes | Find the latest crawled record for a page across crawl runs and compare its raw-content hash. |
+
 File contents live in S3. Users can copy or download them; the application does not publish them to the original website's `/llms.txt` path.
+
+**S3 object keys**
+
+| Content | Key inside the application bucket | Reference in DynamoDB |
+| --- | --- | --- |
+| Raw HTML/Markdown | `raw/{site_id}/{canonical_url_hash}/{raw_html_hash}.{html_or_md}` | CrawlPages: `raw_html_s3_key` |
+| Parsed JSON | `parsed/{parser_version}/{site_id}/{canonical_url_hash}/{raw_html_hash}-{final_url_hash}.json` | CrawlPages: `parsed_content_s3_key` |
+| Generated llms.txt | `llms-txt/{site_id}/{version_id}/llms.txt` | LlmsTxtVersions: `llms_txt_s3_key` |
+
+`canonical_url_hash` identifies the page URL. `raw_html_hash` is the SHA-256 of the downloaded bytes, including for Markdown. `final_url_hash` hashes the URL after redirects. The raw file extension is `html` or `md`.
+
+**When files are reused**
+
+- **Raw content:** the same site, URL, content hash, and extension produce the same key. If that object exists, skip the upload and point the new page record to it.
+- **Parsed JSON:** the same site, URL, raw-content hash, final-URL hash, and parser version produce the same key. If it exists, reuse it without writing another JSON object. 
+- **llms.txt:** if the new run's `crawl_content_hash` matches the current version's, reuse that version without calling Bedrock or writing a new file. This hash covers the page URLs, raw hashes, and parsed-file keys. 
