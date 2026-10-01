@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   Check,
+  CircleAlert,
   Clipboard,
   Download,
   FileClock,
@@ -290,6 +291,14 @@ export function LLMTxtPage({ onBack, onSignOut, siteId }: LLMTxtPageProps) {
                 </div>
                 <pre className="llms-content">{displayedVersion.content}</pre>
               </section>
+            ) : latestCrawl?.status === 'FAILED' ? (
+              <div className="generation-empty" role="status">
+                <CircleAlert size={22} />
+                <div>
+                  <strong>Crawl failed</strong>
+                  <p>The latest crawl failed. No llms.txt file was generated.</p>
+                </div>
+              </div>
             ) : (
               <div className="generation-empty">
                 <LoaderCircle className="spin" size={22} />
