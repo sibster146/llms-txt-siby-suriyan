@@ -1,6 +1,8 @@
 # llms-txt-siby-suriyan
 
 Web application for generating and maintaining `llms.txt` files from website content.
+Presentation and demo at https://docs.google.com/presentation/d/11sAlHJZUB4bPHwjTl_4erueIrrtP47vcB5xx0d2ZCVM/edit?usp=sharing
+
 
 ## Table of Contents
 
